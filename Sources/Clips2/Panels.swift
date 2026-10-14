@@ -60,7 +60,7 @@ struct FramingPopover: View {
                         Spacer()
                         Menu("More") {
                             Button("Reset every camera to centre") {
-                                model.updateClip { $0.framing = model.project.angles.map { _ in Framing() } }
+                                model.updateClip { c in c.framing = model.project.angles.indices.map { c.framing(for: $0).pictureReset } }
                             }
                             Button("Use this framing for all \(clip.format.label) clips") { model.copyFramingToAllClips() }
                         }
@@ -94,9 +94,9 @@ struct FramingPopover: View {
                 Circle().fill(color).frame(width: 8, height: 8)
                 Text(model.project.angles[i].name).font(.callout.weight(.medium))
                 Spacer()
-                Button("Reset") { model.setFraming(i, Framing()) }
+                Button("Reset") { model.setFraming(i, f.pictureReset) }
                     .controlSize(.small)
-                    .disabled(f == Framing())
+                    .disabled(f.pictureIsDefault)
                     .help("Back to the default: centred, not zoomed")
             }
             HStack(alignment: .top, spacing: 12) {
@@ -124,6 +124,15 @@ struct FramingPopover: View {
                                  reset: { var g = clip.framing(for: i); g.zoom = 1; model.setFraming(i, g) }, isDefault: abs(f.zoom - 1) < 0.002)
                 }
             }
+            // where the captions sit while this camera is showing
+            let styleY = model.project.captionStyle.positionY
+            ScaledSlider(title: "Captions while \(model.project.angles[i].name) is showing", value: f.captionY ?? styleY, range: 0.15...0.85, enabled: true,
+                         ends: ("Higher", "Lower"), ticks: [0.15, 0.325, 0.5, 0.675, 0.85],
+                         readout: f.captionY == nil ? "caption style" : "\(Int(((f.captionY ?? styleY) * 100).rounded()))% down",
+                         help: "Move the captions up or down only while this camera is on screen. Reset to use the height from the caption style.",
+                         set: { v in var g = clip.framing(for: i); g.captionY = v; model.setFraming(i, g) },
+                         reset: { var g = clip.framing(for: i); g.captionY = nil; model.setFraming(i, g) }, isDefault: f.captionY == nil)
+                .padding(.top, 2)
         }
         .padding(10)
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
@@ -355,6 +364,7 @@ struct CaptionStyleSheet: View {
                     Stepper("Lines on screen: \(s.maxLines)", value: Binding(get: { s.maxLines }, set: { v in set { $0.maxLines = v } }), in: 1...3)
                     Stepper("Letters per line: \(s.maxCharsPerLine)", value: Binding(get: { s.maxCharsPerLine }, set: { v in set { $0.maxCharsPerLine = v } }), in: 8...36)
                     slider("Height on screen", s.positionY, 0.15...0.85) { v in set { $0.positionY = v } }
+                        .help("Where captions sit. A camera can have its own height in a clip: Adjust framing… ▸ Captions while … is showing.")
                     slider("Side margins", s.sideMargin, 0.03...0.2) { v in set { $0.sideMargin = v } }
                     Text("With the 9:16 safe-zone guides on, keep captions inside the dashed box so app buttons don't cover them.")
                         .font(.caption).foregroundStyle(.secondary)

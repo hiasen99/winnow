@@ -16,6 +16,9 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
 - **Edit on a real timeline.** Final Cut-style timeline with trimming, blade, markers,
   snapping and skimming. Cameras switch automatically to whoever is speaking, with
   manual overrides per section. Pick which mics you hear, per clip.
+- **Frame each camera.** Move and zoom each camera's picture inside the vertical,
+  square or wide frame, and give each camera its own caption height so captions stay
+  clear of faces and mics.
 - **Captions that are easy to fix.** Captions are blocks on the timeline: drag to move,
   drag edges to re-time, double-click to fix the text. Style presets for the look.
 - **Review fast.** Mark clips Used (U) or Rejected (X) and jump to the next.

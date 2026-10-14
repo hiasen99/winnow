@@ -126,6 +126,14 @@ struct Framing: Codable, Hashable {
     var x: Double = 0.5
     var y: Double = 0.5
     var zoom: Double = 1.0
+    /// Caption height while this camera is on screen (centre of the caption, fraction of frame height).
+    /// nil = the caption style's height. (optional so older projects still load)
+    var captionY: Double? = nil
+
+    /// Only the picture part (centre + zoom) is at its default; the caption height doesn't count.
+    var pictureIsDefault: Bool { abs(x - 0.5) < 0.002 && abs(y - 0.5) < 0.002 && abs(zoom - 1) < 0.002 }
+    /// Centred and not zoomed, keeping this camera's caption height.
+    var pictureReset: Framing { Framing(captionY: captionY) }
 }
 
 struct AudioMix: Codable, Hashable {

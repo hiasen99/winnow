@@ -18,6 +18,7 @@ struct CaptionPage {
     var end: Double
     var lines: [[Int]]  // indexes into the word list
     var blockID: UUID? = nil    // a hand-edited caption (nil = automatic from the transcript)
+    var positionY: Double? = nil  // height on screen when the camera showing has its own (nil = the style's)
     var wordIndexes: [Int] { lines.flatMap { $0 } }
 }
 
@@ -58,7 +59,8 @@ enum Captions {
         let total = clip.outputDuration
         guard let blocks0 = clip.captionBlocks, !blocks0.isEmpty else {
             let w = words(for: clip, project: project, uppercase: style.uppercase)
-            return CaptionTrack(words: w, pages: pages(w, style: style, renderSize: size, total: total))
+            return placedByCamera(CaptionTrack(words: w, pages: pages(w, style: style, renderSize: size, total: total)),
+                                  clip: clip, project: project)
         }
         let blocks = blocks0.sorted { $0.start < $1.start }
         // each page with its own words; joined into one list (in time order) at the end
@@ -108,7 +110,30 @@ enum Captions {
             allWords.append(contentsOf: ws)
             allPages.append(p)
         }
-        return CaptionTrack(words: allWords, pages: allPages)
+        return placedByCamera(CaptionTrack(words: allWords, pages: allPages), clip: clip, project: project)
+    }
+
+    /// Cameras with their own caption height: each caption takes the height of the camera that's on screen
+    /// for most of the time it's shown.
+    static func placedByCamera(_ track: CaptionTrack, clip: Clip, project: Project) -> CaptionTrack {
+        guard clip.framing.contains(where: { $0.captionY != nil }) else { return track }
+        let pieces = Schedule.pieces(project: project, clip: clip, auto: Schedule.auto(project: project))
+        guard !pieces.isEmpty else { return track }
+        var t = track
+        for k in t.pages.indices {
+            let pg = t.pages[k]
+            var best: (angle: Int, overlap: Double)? = nil
+            var overlapBy: [Int: Double] = [:]
+            for pc in pieces {
+                let o = min(pg.end, pc.outStart + pc.duration) - max(pg.start, pc.outStart)
+                if o > 0 { overlapBy[pc.angle, default: 0] += o }
+            }
+            for (a, o) in overlapBy.sorted(by: { $0.key < $1.key }) where best == nil || o > best!.overlap { best = (a, o) }
+            // a caption that shows for no time at all: the camera at its start
+            let angle = best?.angle ?? pieces.last(where: { $0.outStart <= pg.start + 1e-4 })?.angle ?? pieces[0].angle
+            t.pages[k].positionY = clip.framing(for: angle).captionY
+        }
+        return t
     }
 
     /// Breaks one caption's words into lines (as many as it needs).
@@ -288,7 +313,7 @@ enum Captions {
             pageLayer.opacity = 0
             pageLayer.add(discrete([0, 1, 0], [page.start, page.end], total: total), forKey: "show")
             let blockH = step * CGFloat(page.lines.count - 1) + lineH
-            var y = CGFloat(style.positionY) * renderSize.height - blockH / 2
+            var y = CGFloat(page.positionY ?? style.positionY) * renderSize.height - blockH / 2
             for (li, line) in page.lines.enumerated() {
                 let widths = line.map { measure(words[$0].text, font: f) }
                 let lineW = widths.reduce(0, +) + space * CGFloat(max(0, line.count - 1))

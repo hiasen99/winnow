@@ -300,6 +300,19 @@ enum SelfTest {
                     let lay = Captions.makeLayer(Captions.track(for: m.selectedClip!, project: m.project), style: m.project.captionStyle,
                                                  renderSize: m.selectedClip!.format.renderSize, total: m.selectedClip!.outputDuration)
                     log("caption layer pages: \(lay.sublayers?.count ?? 0)")
+                    // a camera with its own caption height
+                    let ang = m.project.videoIndices.first ?? 0
+                    m.updateClip { c in
+                        while c.framing.count <= ang { c.framing.append(Framing()) }
+                        c.framing[ang].captionY = 0.3
+                    }
+                    let trc = Captions.track(for: m.selectedClip!, project: m.project)
+                    let pcs = Schedule.pieces(project: m.project, clip: m.selectedClip!, auto: m.auto)
+                    log("camera caption height: \(trc.pages.filter { $0.positionY == 0.3 }.count) of \(trc.pages.count) captions at 0.3; cameras \(Set(pcs.map { $0.angle }).sorted())")
+                    let back2 = try Store.decoder.decode(Project.self, from: Store.encoder.encode(m.project))
+                    log("caption height after reload: \(back2.clips.first { $0.id == m.selectedClipID }?.framing(for: ang).captionY ?? -1)")
+                    m.undo()
+                    log("after undo: \(Captions.track(for: m.selectedClip!, project: m.project).pages.filter { $0.positionY != nil }.count) captions with a camera height")
                     m.undo(); m.undo(); m.undo(); m.undo(); m.undo(); m.undo()
                 }
             }

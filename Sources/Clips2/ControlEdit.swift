@@ -406,13 +406,15 @@ extension Control {
         // Framing
 
         ControlCommand(id: "framing.set", label: "Adjust Framing", menu: "Clip inspector ▸ Adjust framing…", changesProject: true,
-                       params: "{clip?, camera: \"A\"…, leftRight?: 0…1 (0 = Left end of the slider, 0.5 centred, 1 = Right: the picture moves right), downUp?: 0…1 (1 = picture moves up), zoom?: 1…2.5, reset?: true}",
+                       params: "{clip?, camera: \"A\"…, leftRight?: 0…1 (0 = Left end of the slider, 0.5 centred, 1 = Right: the picture moves right), downUp?: 0…1 (1 = picture moves up), zoom?: 1…2.5, captionHeight?: 0.15…0.85 (centre of the captions while this camera is showing, fraction of the frame from the top) or \"style\" (use the caption style's height), reset?: true (centre + zoom only)}",
                        enabled: { hasClips($0) },
                        run: { app, a in
             let m = try model(app)
             let c = try targetClip(m, a)
             guard let i = try cameraIndex(m.project, a.d["camera"]) else { throw ControlError("Pick one camera for framing.") }
-            var f = a.bool("reset") == true ? Framing() : c.framing(for: i)
+            var f = a.bool("reset") == true ? c.framing(for: i).pictureReset : c.framing(for: i)
+            if let s = a.str("captionHeight"), ["style", "default", "none", "reset"].contains(s.lowercased()) { f.captionY = nil }
+            else if let h = a.num("captionHeight") { f.captionY = min(0.85, max(0.15, h)) }
             if let z = a.num("zoom") { f.zoom = min(2.5, max(1, z)) }
             let lim = m.framingLimits(angle: i, format: c.format, zoom: f.zoom)
             if let u = a.num("leftRight") { f.x = lim.x.upperBound - min(1, max(0, u)) * (lim.x.upperBound - lim.x.lowerBound) }
@@ -426,7 +428,7 @@ extension Control {
             var note = ""
             if a.has("leftRight") && lim.x.upperBound - lim.x.lowerBound < 0.001 { note += " No room left/right at this zoom (zoom in first)." }
             if a.has("downUp") && lim.y.upperBound - lim.y.lowerBound < 0.001 { note += " No room up/down at this zoom (zoom in first)." }
-            return "Camera \(angleName(i, m.project)) in \"\(c.title)\": zoom \(String(format: "%.2f", set.zoom))×, centre x \(String(format: "%.2f", set.x)) y \(String(format: "%.2f", set.y))." + note
+            return "Camera \(angleName(i, m.project)) in \"\(c.title)\": zoom \(String(format: "%.2f", set.zoom))×, centre x \(String(format: "%.2f", set.x)) y \(String(format: "%.2f", set.y)), captions \(set.captionY.map { String(format: "at %.2f", $0) } ?? "at the caption style's height")." + note
         }),
         ControlCommand(id: "framing.copyToAll", label: "Copy Framing to All Clips of This Shape", menu: "Adjust framing… ▸ More", changesProject: true,
                        params: "{clip?}",

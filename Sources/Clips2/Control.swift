@@ -243,7 +243,9 @@ enum Control {
         }
         d["framing"] = p.videoIndices.map { i -> [String: Any] in
             let f = c.framing(for: i)
-            return ["camera": angleName(i, p), "x": r3(f.x), "y": r3(f.y), "zoom": r3(f.zoom)]
+            var e: [String: Any] = ["camera": angleName(i, p), "x": r3(f.x), "y": r3(f.y), "zoom": r3(f.zoom)]
+            e["captionHeight"] = f.captionY.map { r3($0) as Any } ?? "caption style"
+            return e
         }
         let track = Captions.track(for: c, project: p)
         let ids = m.captionIDs(track, clip: c)
@@ -254,6 +256,7 @@ enum Control {
             }.joined(separator: " / ")
             var e: [String: Any] = ["number": k + 1, "id": ids[k].uuidString, "start": r3(pg.start), "end": r3(pg.end), "text": text]
             if pg.blockID != nil { e["handEdited"] = true }
+            if let y = pg.positionY { e["height"] = r3(y) }
             if pg.wordIndexes.isEmpty { e["noCaption"] = true }
             return e
         }
