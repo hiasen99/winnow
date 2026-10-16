@@ -9,7 +9,8 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
   recordings (lav mics, a recorder, a call platform's combined track). Winnow lines them
   all up by their sound.
 - **Transcribed on your Mac.** Uses Apple's on-device speech recognition and works out
-  who's talking. Nothing is uploaded.
+  who's talking, then lines every word up with the moment it's spoken so captions land
+  on time (English; a one-time 175 MB download). Nothing is uploaded.
 - **Claude finds the clips.** Press *Find Clips* and Claude reads the transcript and
   suggests standalone moments. Use your own Claude API key, or copy the prompt into a
   Claude chat and paste the answer back — no key needed.
@@ -67,3 +68,6 @@ its data lives in `~/Library/Application Support/Clips 2/`.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Word timing uses a Core ML conversion of wav2vec 2.0 (base, LibriSpeech 960h) from
+fairseq / torchaudio (MIT License), downloaded from this repository's `aligner-1` release.

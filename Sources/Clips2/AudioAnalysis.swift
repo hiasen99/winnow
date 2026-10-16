@@ -373,7 +373,8 @@ enum AudioAnalysis {
 
     /// Speech recognisers often stretch a word over the silence before it. Trim each word's
     /// start/end to where there is actually sound, so clips and captions land on the voice.
-    static func tighten(words: inout [Word], angles: [AngleSource], envelopes: [[Float]?]) {
+    /// `starts: false` leaves word starts alone (after forced alignment, which places them better).
+    static func tighten(words: inout [Word], angles: [AngleSource], envelopes: [[Float]?], starts: Bool = true) {
         guard envelopes.contains(where: { $0 != nil }) else { return }
         // noise floor: 10th percentile of the combined level
         var sample: [Float] = []
@@ -400,7 +401,7 @@ enum AudioAnalysis {
                     run = 0
                 }
             }
-            if startIdx > 2 { words[i].start = Double(a + startIdx) / envRate - 0.04 }
+            if starts, startIdx > 2 { words[i].start = Double(a + startIdx) / envRate - 0.04 }
             if let last = levels.lastIndex(where: { $0 >= thr }), last < levels.count - 4, last > startIdx {
                 words[i].end = Double(a + last + 1) / envRate + 0.06
             }

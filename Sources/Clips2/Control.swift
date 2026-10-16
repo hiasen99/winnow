@@ -458,6 +458,18 @@ enum Control {
             app.rename(m.folder, to: n)
             return "Renamed \"\(old)\" to \"\(n)\"."
         }),
+        ControlCommand(id: "transcript.retime", label: "Re-time Words to the Sound", menu: "Clip ▸ Re-time Words to the Sound", changesProject: true,
+                       params: "{} — re-times every transcript word against the audio (forced alignment, English). Keeps text fixes, hidden words and speakers. One undo step. Takes about a minute for a 30-minute recording (first run also downloads the model).",
+                       enabled: { hasProject($0) },
+                       run: { app, a in
+            let m = try model(app)
+            guard m.busy == nil else { throw ControlError("Busy: \(m.busy!)") }
+            guard m.isReady else { throw ControlError("This project hasn't been transcribed yet.") }
+            m.notice = nil; m.errorText = nil
+            await m.retimeWords()
+            if let e = m.errorText { throw ControlError(e) }
+            return m.notice ?? "Done."
+        }),
         ControlCommand(id: "clip.select", label: "Show Clip", menu: "Clip list (click a clip)",
                        params: "{clip: number in the list (1 = first), id or title; omit, or \"full\", for the full recording}",
                        enabled: { hasProject($0) },

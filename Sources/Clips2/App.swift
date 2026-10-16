@@ -217,6 +217,7 @@ struct Clips2App: App {
                 Button("Previous Edit Point") { app.active?.jumpEditPoint(next: false) }
                 Divider()
                 Button("Fix Transcript Text…") { app.active?.beginEditingText() }
+                Button("Re-time Words to the Sound") { if let m = app.active { Task { await m.retimeWords() } } }
                 Divider()
                 Button("Mark as Used, Go to Next  (U)") { app.active?.markAndAdvance(.used) }
                 Button("Mark as Rejected, Go to Next  (X)") { app.active?.markAndAdvance(.rejected) }
@@ -365,6 +366,36 @@ enum Entry {
         if let i = args.firstIndex(of: "--resynctest"), i + 1 < args.count {
             let f = URL(fileURLWithPath: args[i + 1])
             Task { @MainActor in exit(await SelfTest.resyncTest(folder: f)) }
+            dispatchMain()
+        }
+        if let i = args.firstIndex(of: "--aligntest"), i + 3 < args.count {
+            // --aligntest <16 kHz mono wav> <words.json> <out.json>
+            let a = Array(args[(i + 1)...(i + 3)])
+            Task {
+                do {
+                    let words = try JSONDecoder().decode([Word].self, from: Data(contentsOf: URL(fileURLWithPath: a[1])))
+                    let (out, st) = try await Aligner.align(words: words, audioFile: URL(fileURLWithPath: a[0]))
+                    try JSONEncoder().encode(out).write(to: URL(fileURLWithPath: a[2]))
+                    print("aligned \(st.aligned) kept \(st.kept) segments \(st.segments) in \(String(format: "%.1f", st.seconds)) s")
+                    exit(0)
+                } catch { print("aligntest failed: \(error)"); exit(1) }
+            }
+            dispatchMain()
+        }
+        if let i = args.firstIndex(of: "--alignmix"), i + 2 < args.count {
+            // --alignmix <audio file> <out.wav>: the mix the app aligns against, for one mic at offset 0
+            let src = URL(fileURLWithPath: args[i + 1]), dst = URL(fileURLWithPath: args[i + 2])
+            Task {
+                do {
+                    let raw = FileManager.default.temporaryDirectory.appendingPathComponent("alignmix.f32")
+                    let a = try await AudioAnalysis.analyze(url: src, rawOut: raw)
+                    var ang = AngleSource(name: "Mic", path: src.path, isVideo: false)
+                    ang.duration = Double(a.sampleCount) / AudioAnalysis.rawRate
+                    try AudioAnalysis.writeMix(angles: [ang], audio: [a], total: ang.duration, to: dst)
+                    print("gain \(AudioAnalysis.levelMatchGain(a.envelope)) dB, \(a.sampleCount) samples")
+                    exit(0)
+                } catch { print("alignmix failed: \(error)"); exit(1) }
+            }
             dispatchMain()
         }
         if let i = args.firstIndex(of: "--selftest") {

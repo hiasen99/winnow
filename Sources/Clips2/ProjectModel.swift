@@ -11,6 +11,8 @@ final class ProjectModel: ObservableObject {
     @Published var loaded: [LoadedAngle?] = []
     /// Bumped whenever the words or who-said-what change, so the transcript view redraws.
     @Published var transcriptVersion = 0
+    /// Why the last word alignment was skipped (nil = it ran, or wasn't needed).
+    var alignProblem: String? = nil
     /// Opened files matching the project's sources (undo can leave extra entries in `loaded`).
     var sources: [LoadedAngle?] {
         (0..<project.angles.count).map { $0 < loaded.count ? loaded[$0] : nil }
@@ -275,11 +277,13 @@ final class ProjectModel: ObservableObject {
         defer { try? FileManager.default.removeItem(at: mixURL) }
         busy = "Transcribing (on this Mac)…"
         var words = try await Transcriber.transcribe(audioFile: mixURL, language: p.language,
-            progress: { [weak self] f in Task { @MainActor in self?.progress = 0.45 + f * 0.5 } },
+            progress: { [weak self] f in Task { @MainActor in self?.progress = 0.45 + f * 0.4 } },
             status: { [weak self] s in Task { @MainActor in self?.busy = s } })
+        let aligned: Bool
+        (words, aligned) = await alignWords(words, mix: mixURL, language: p.language, from: 0.85, to: 0.95)
         busy = "Working out who's talking…"
         let speechEnv = speechEnvelopes(p)
-        AudioAnalysis.tighten(words: &words, angles: p.angles, envelopes: speechEnv)
+        AudioAnalysis.tighten(words: &words, angles: p.angles, envelopes: speechEnv, starts: !aligned)
         let count = AudioAnalysis.assignSpeakers(words: &words, angles: p.angles, envelopes: speechEnv)
         p.words = words
         var fresh = defaultSpeakers(count, p)
@@ -292,6 +296,108 @@ final class ProjectModel: ObservableObject {
             }
         } else {
             p.speakers = fresh
+        }
+    }
+
+    /// Puts every word where it's actually spoken (see Aligner). On any problem the words come back unchanged.
+    func alignWords(_ words: [Word], mix: URL, language: String, from p0: Double, to p1: Double) async -> ([Word], Bool) {
+        guard Aligner.supports(language: language), !words.isEmpty else { return (words, false) }
+        do {
+            try await Aligner.ensureModel(
+                status: { [weak self] s in Task { @MainActor in self?.busy = s } },
+                progress: { [weak self] f in Task { @MainActor in self?.progress = p0 + f * (p1 - p0) * 0.5 } })
+            busy = "Lining each word up with the sound…"
+            let (aligned, _) = try await Aligner.align(words: words, audioFile: mix,
+                progress: { [weak self] f in Task { @MainActor in self?.progress = p0 + (p1 - p0) * (0.5 + f * 0.5) } })
+            return (aligned, true)
+        } catch {
+            Log.write("aligner skipped: \(error)")
+            alignProblem = error.localizedDescription
+            return (words, false)
+        }
+    }
+
+    /// Re-times the existing transcript against the sound, keeping every fix, hidden word and speaker.
+    /// One undo step. Hand-made captions keep the words they were made from.
+    func retimeWords() async {
+        guard busy == nil, isReady, !project.words.isEmpty else { return }
+        guard Aligner.supports(language: project.language) else {
+            notice = "Re-timing words works for English recordings only."
+            return
+        }
+        engine.pause()
+        let before = project
+        let cache = Store.cacheDir(folder)
+        let speech = project.speechIndices.filter { project.angles[$0].hasAudio }
+        var raws: [URL] = []
+        let mixURL = cache.appendingPathComponent("align-mix.wav")
+        defer {
+            for u in raws { try? FileManager.default.removeItem(at: u) }
+            try? FileManager.default.removeItem(at: mixURL)
+        }
+        alignProblem = nil
+        do {
+            var audio: [AngleAudio?] = Array(repeating: nil, count: project.angles.count)
+            for (k, i) in speech.enumerated() {
+                busy = "Listening to \(project.angles[i].name)…"
+                let raw = cache.appendingPathComponent("raw-\(i).f32"); raws.append(raw)
+                let base = Double(k) / Double(max(1, speech.count))
+                audio[i] = try await AudioAnalysis.analyze(url: project.angles[i].url, rawOut: raw) { [weak self, n = speech.count] f in
+                    Task { @MainActor in self?.progress = (base + f / Double(max(1, n))) * 0.3 }
+                }
+            }
+            busy = "Mixing the audio…"
+            try AudioAnalysis.writeMix(angles: project.angles, audio: audio, total: project.masterDuration, to: mixURL)
+            progress = 0.35
+            let old = project.words
+            var (words, ok) = await alignWords(old, mix: mixURL, language: project.language, from: 0.35, to: 0.95)
+            if !ok { throw ClipsError(alignProblem ?? "The words couldn't be lined up.") }
+            AudioAnalysis.tighten(words: &words, angles: project.angles, envelopes: speechEnvelopes(project), starts: false)
+            var p = project
+            p.words = words
+            // hand-made captions: ones still sitting on their words move with them; ones dragged by hand
+            // stay put but keep owning the same words
+            let warp = TimeWarp(old: old, new: words)
+            for c in p.clips.indices {
+                guard var blocks = p.clips[c].captionBlocks, !blocks.isEmpty else { continue }
+                for b in blocks.indices {
+                    let owned = old.indices.filter { blocks[b].owns(old[$0]) }
+                    guard let f = owned.first, let l = owned.last else { continue }
+                    if abs(blocks[b].start - old[f].start) < 0.06 {
+                        blocks[b].start = warp.map(blocks[b].start)
+                        blocks[b].end = max(blocks[b].start + 0.1, warp.map(blocks[b].end))
+                        for k in blocks[b].words.indices {
+                            blocks[b].words[k].start = warp.map(blocks[b].words[k].start)
+                            blocks[b].words[k].end = warp.map(blocks[b].words[k].end)
+                        }
+                        if let cv = blocks[b].covers { blocks[b].covers = TimeRange(start: warp.map(cv.start), end: warp.map(cv.end)) }
+                    } else {
+                        blocks[b].covers = TimeRange(start: words[f].start, end: words[l].end)
+                    }
+                }
+                // a word a hand caption held before must still be held (or it would pop up as its own caption)
+                let before0 = p.clips[c].captionBlocks ?? []
+                for i in old.indices {
+                    guard let b = before0.firstIndex(where: { $0.owns(old[i]) }), b < blocks.count,
+                          !blocks.contains(where: { $0.owns(words[i]) }) else { continue }
+                    let cv = blocks[b].covers ?? TimeRange(start: blocks[b].start, end: blocks[b].end)
+                    blocks[b].covers = TimeRange(start: min(cv.start, words[i].start), end: max(cv.end, words[i].end + 0.001))
+                }
+                p.clips[c].captionBlocks = blocks
+            }
+            let moved = zip(old, words).filter { abs($0.start - $1.start) > 0.1 }.count
+            undoStack.append(before); redoStack.removeAll()
+            project = p
+            transcriptVersion += 1
+            save()
+            busy = nil; progress = 1
+            recomputeAuto(); rebuild()
+            notice = "Re-timed \(words.count) words to the sound; \(moved) moved by more than a tenth of a second. Undo puts them back."
+            Log.write("retime done: \(moved)/\(words.count) moved >0.1 s")
+        } catch {
+            busy = nil
+            errorText = "Re-timing words failed: \(error.localizedDescription)"
+            Log.write("retime failed: \(error)")
         }
     }
 
@@ -1187,4 +1293,29 @@ struct WaveLane {
     var values: [Float]
     var heard: [Bool]
     var color: [Color]     // one colour, or one per column
+}
+
+/// Maps times on the old word timing to the new one (piecewise linear through every word's start and end).
+struct TimeWarp {
+    private var xs: [Double] = [], ys: [Double] = []
+    init(old: [Word], new: [Word]) {
+        for (a, b) in zip(old, new) {
+            for (x, y) in [(a.start, b.start), (a.end, b.end)] {
+                if let lx = xs.last, let ly = ys.last {
+                    if x == lx { ys[ys.count - 1] = max(ly, y); continue }   // one word ends where the next starts
+                    if x < lx || y < ly { continue }
+                }
+                xs.append(x); ys.append(y)
+            }
+        }
+    }
+    func map(_ t: Double) -> Double {
+        guard let fx = xs.first, let lx = xs.last else { return t }
+        if t <= fx { return t + (ys[0] - fx) }
+        if t >= lx { return t + (ys[ys.count - 1] - lx) }
+        var lo = 0, hi = xs.count - 1
+        while hi - lo > 1 { let m = (lo + hi) / 2; if xs[m] <= t { lo = m } else { hi = m } }
+        let f = (t - xs[lo]) / (xs[hi] - xs[lo])
+        return ys[lo] + f * (ys[hi] - ys[lo])
+    }
 }
