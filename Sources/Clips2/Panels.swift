@@ -6,7 +6,6 @@ import AppKit
 /// Under the clip list: the clip's shape, safe zones, and an "Adjust framing" pop-over with each camera's sliders.
 struct ClipInspector: View {
     @ObservedObject var model: ProjectModel
-    @State private var showFraming = false
 
     var body: some View {
         if let clip = model.selectedClip {
@@ -18,11 +17,11 @@ struct ClipInspector: View {
                 .pickerStyle(.segmented).labelsHidden()
                 .help("The shape of the finished video")
                 HStack(spacing: 8) {
-                    Button { showFraming.toggle() } label: { Label("Adjust framing…", systemImage: "crop") }
+                    Button { model.showFraming.toggle() } label: { Label("Adjust framing…", systemImage: "crop") }
                         .controlSize(.small)
-                        .help("Move and zoom each camera's picture inside the frame. You can also drag the picture in the viewer, or pinch to zoom.")
-                        .popover(isPresented: $showFraming, arrowEdge: .trailing) {
-                            FramingPopover(model: model).frame(width: 330)
+                        .help("Move and zoom each camera's picture inside the frame, or just one shot. You can also drag the picture in the viewer, or pinch to zoom.")
+                        .popover(isPresented: $model.showFraming, arrowEdge: .trailing) {
+                            FramingPopover(model: model, engine: model.engine).frame(width: 330)
                         }
                     Spacer()
                     if clip.format == .vertical {
@@ -30,6 +29,7 @@ struct ClipInspector: View {
                             .help("Show the area social apps leave clear of their buttons and captions")
                     }
                 }
+                ShotScopeRow(model: model, engine: model.engine)
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -46,10 +46,44 @@ struct ClipInspector: View {
     }
 }
 
+/// Under "Adjust framing…": whether dragging the picture changes every shot from that camera or just this shot.
+struct ShotScopeRow: View {
+    @ObservedObject var model: ProjectModel
+    @ObservedObject var engine: PlayerEngine
+
+    var body: some View {
+        let pc = model.shotAtPlayhead
+        let cam = pc.map { model.project.angles[$0.angle].shortName } ?? ""
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text("Frame").font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: $model.frameScope) {
+                    Text("Every shot").tag(ProjectModel.FrameScope.camera)
+                    Text("This shot").tag(ProjectModel.FrameScope.shot)
+                }
+                .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+            }
+            .help("Every shot: dragging the picture moves that camera in every shot. This shot: only the shot under the playhead, for when someone moves. ↑ / ↓ jump from shot to shot.")
+            if let pc, model.shotHasOwnFraming(pc) {
+                HStack(spacing: 5) {
+                    Image(systemName: "crop").foregroundStyle(Brand.gold)
+                    Text("This \(cam) shot has its own framing").font(.caption).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button("Use camera's") { model.removeShotFraming(pc) }.controlSize(.mini)
+                        .help("Back to the framing every other \(cam) shot uses")
+                }
+            } else if model.frameScope == .shot, pc != nil {
+                Text("Drag the picture to reframe just this \(cam) shot.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 /// Each camera's framing: a little map of the whole camera picture with the part that's used,
 /// and sliders with a scale so you can see how far it can still move.
 struct FramingPopover: View {
     @ObservedObject var model: ProjectModel
+    @ObservedObject var engine: PlayerEngine
 
     var body: some View {
         if let clip = model.selectedClip {
@@ -62,10 +96,23 @@ struct FramingPopover: View {
                             Button("Reset every camera to centre") {
                                 model.updateClip { c in c.framing = model.project.angles.indices.map { c.framing(for: $0).pictureReset } }
                             }
+                            if let n = clip.shotFraming?.count, n > 0 {
+                                Button("Shots framed on their own (\(n)) back to their camera") { model.removeAllShotFraming() }
+                            }
                             Button("Use this framing for all \(clip.format.label) clips") { model.copyFramingToAllClips() }
                         }
                         .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
                         .help("Reset, or copy this framing to your other clips of the same shape")
+                    }
+                    Picker("", selection: $model.frameScope) {
+                        Text("Every shot").tag(ProjectModel.FrameScope.camera)
+                        Text("This shot only").tag(ProjectModel.FrameScope.shot)
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
+                    .help("Every shot: a camera's framing is used every time that camera is on screen. This shot only: frame the shot under the playhead by itself (when someone moves).")
+                    if let pc = model.shotAtPlayhead, model.framesShot(pc) {
+                        shotBox(clip, pc)
+                        Text("Cameras (every other shot)").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4)
                     }
                     ForEach(model.project.videoIndices, id: \.self) { i in
                         cameraBox(clip, i)
@@ -77,6 +124,65 @@ struct FramingPopover: View {
             .fixedSize(horizontal: false, vertical: true)
         } else {
             Text("Pick a clip first.").padding(20)
+        }
+    }
+
+    /// The shot under the playhead, framed on its own.
+    @ViewBuilder func shotBox(_ clip: Clip, _ pc: EditPiece) -> some View {
+        let i = pc.angle
+        let f = model.framing(of: pc)
+        let own = model.shotHasOwnFraming(pc)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "crop").foregroundStyle(Brand.gold)
+                Text("This shot · \(model.project.angles[i].name)").font(.callout.weight(.medium))
+                Text("\(fmtTime(pc.outStart, frac: true))–\(fmtTime(pc.outStart + pc.duration, frac: true))")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Spacer()
+                Button("Use camera's") { model.removeShotFraming(pc) }
+                    .controlSize(.small).disabled(!own)
+                    .help("This shot goes back to the framing every other \(model.project.angles[i].shortName) shot uses")
+            }
+            framingControls(clip, i, f, color: Brand.gold) { g in model.setShotFraming(pc, g) }
+            Text(own ? "Only this shot. Move the playhead to another shot to frame that one." : "Change anything here and this shot gets its own framing; the other \(model.project.angles[i].shortName) shots stay as they are.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(Brand.gold.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Brand.gold.opacity(0.5), lineWidth: 1))
+    }
+
+    /// Map + left/right, down/up and zoom sliders for one framing.
+    @ViewBuilder func framingControls(_ clip: Clip, _ i: Int, _ f: Framing, color: Color, set: @escaping (Framing) -> Void) -> some View {
+        let lim = model.framingLimits(angle: i, format: clip.format, zoom: f.zoom)
+        let canX = lim.x.upperBound - lim.x.lowerBound > 0.001
+        let canY = lim.y.upperBound - lim.y.lowerBound > 0.001
+        let ux = canX ? (lim.x.upperBound - min(lim.x.upperBound, max(lim.x.lowerBound, f.x))) / (lim.x.upperBound - lim.x.lowerBound) : 0.5
+        let uy = canY ? (min(lim.y.upperBound, max(lim.y.lowerBound, f.y)) - lim.y.lowerBound) / (lim.y.upperBound - lim.y.lowerBound) : 0.5
+        HStack(alignment: .top, spacing: 12) {
+            FramingMap(source: sourceSize(i), lim: lim, f: f, color: color)
+                .frame(width: 96, height: 72)
+                .help("The whole camera picture. The coloured box is the part your clip shows.")
+            VStack(alignment: .leading, spacing: 10) {
+                ScaledSlider(title: "Left / right", value: ux, range: 0...1, enabled: canX,
+                             ends: ("Left", "Right"), ticks: [0, 0.25, 0.5, 0.75, 1],
+                             readout: canX ? sideText(ux, "left", "right") : "no room",
+                             help: canX ? "Slide right and the picture moves right" : "The whole width is already in the frame. Zoom in to move it.",
+                             set: { u in var g = f; g.x = lim.x.upperBound - u * (lim.x.upperBound - lim.x.lowerBound); set(g) },
+                             reset: { var g = f; g.x = 0.5; set(g) }, isDefault: abs(f.x - 0.5) < 0.002)
+                ScaledSlider(title: "Down / up", value: uy, range: 0...1, enabled: canY,
+                             ends: ("Down", "Up"), ticks: [0, 0.25, 0.5, 0.75, 1],
+                             readout: canY ? sideText(uy, "down", "up") : "no room",
+                             help: canY ? "Slide right and the picture moves up" : "The whole height is already in the frame. Zoom in to move it.",
+                             set: { u in var g = f; g.y = lim.y.lowerBound + u * (lim.y.upperBound - lim.y.lowerBound); set(g) },
+                             reset: { var g = f; g.y = 0.5; set(g) }, isDefault: abs(f.y - 0.5) < 0.002)
+                ScaledSlider(title: "Zoom", value: f.zoom, range: 1...2.5, enabled: true,
+                             ends: ("1×", "2.5×"), ticks: [1, 1.5, 2, 2.5],
+                             readout: String(format: "%.1f×", f.zoom),
+                             help: "Zoom in (or pinch in the viewer)",
+                             set: { v in var g = f; g.zoom = v; set(g) },
+                             reset: { var g = f; g.zoom = 1; set(g) }, isDefault: abs(f.zoom - 1) < 0.002)
+            }
         }
     }
 

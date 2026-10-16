@@ -395,6 +395,18 @@ struct TimelinePanel: View {
                 m.addSeparator()
             }
         case .video:
+            if model.selectedClip != nil, let pc = model.tlPieces.last(where: { $0.outStart <= t + 1e-4 }) {
+                let cam = p0name(pc.angle)
+                m.add("Frame This \(cam) Shot on Its Own…") {
+                    engine.seek(min(max(t, pc.outStart + 0.001), pc.outStart + pc.duration - 0.001))
+                    model.frameScope = .shot
+                    model.showFraming = true
+                }
+                if model.shotHasOwnFraming(pc) {
+                    m.add("Use Camera \(cam)'s Framing for This Shot") { model.removeShotFraming(pc) }
+                }
+                m.addSeparator()
+            }
             if let c = model.selectedClip, let k = model.segmentIndex(atOutput: t) {
                 let segs = c.segments
                 let s = segs[k]
@@ -416,13 +428,23 @@ struct TimelinePanel: View {
         default: break
         }
         if model.tlSel != nil {
-            if model.selectedClip != nil { m.add("Cut Selection") { model.cutTimelineSelection() } }
+            if model.selectedClip != nil {
+                m.add("Cut Selection") { model.cutTimelineSelection() }
+                // camera for just the selected stretch
+                for i in model.project.videoIndices {
+                    m.add("Camera \(p0name(i)) for the Selection") { model.cutTo(angle: i) }
+                }
+                m.add("Automatic Camera for the Selection") { model.cutTo(angle: nil) }
+                m.addSeparator()
+            }
             else { m.add("Make Clip from Selection") { model.timelineSelectionToClip() } }
         }
         m.add("Add Marker at Playhead") { model.addMarker() }
         m.add("Zoom to Fit") { model.fitTimeline() }
         return m
     }
+
+    func p0name(_ i: Int) -> String { i < model.project.angles.count ? model.project.angles[i].shortName : "?" }
 
     // MARK: filmstrip
 
@@ -538,10 +560,16 @@ struct TimelinePanel: View {
             if pc.outStart > L.start { ctx.fill(Path(CGRect(x: L.x(pc.outStart) - 0.5, y: L.videoY + 2, width: 1, height: L.videoH - 4)), with: .color(col.opacity(0.9))) }
             if xb - xa > 26, pc.angle < p.angles.count {
                 let name = p.angles[pc.angle].shortName
-                let lr = CGRect(x: xa + 3, y: L.videoY + 8, width: CGFloat(name.count) * 7 + 8, height: 14)
+                let own = clip != nil && model.shotHasOwnFraming(pc)
+                let lr = CGRect(x: xa + 3, y: L.videoY + 8, width: CGFloat(name.count) * 7 + 8 + (own ? 14 : 0), height: 14)
                 ctx.fill(Path(roundedRect: lr, cornerRadius: 3), with: .color(.black.opacity(0.55)))
                 ctx.draw(Text(name).font(.system(size: 9.5, weight: .bold)).foregroundColor(col),
                          at: CGPoint(x: lr.minX + 4, y: lr.midY), anchor: .leading)
+                if own {
+                    // this shot is framed on its own
+                    ctx.draw(Text(Image(systemName: "crop")).font(.system(size: 9, weight: .bold)).foregroundColor(Brand.gold),
+                             at: CGPoint(x: lr.maxX - 4, y: lr.midY), anchor: .trailing)
+                }
             }
         }
         // block outlines, edit points

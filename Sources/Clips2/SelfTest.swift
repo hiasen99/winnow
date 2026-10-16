@@ -315,6 +315,54 @@ enum SelfTest {
                     log("after undo: \(Captions.track(for: m.selectedClip!, project: m.project).pages.filter { $0.positionY != nil }.count) captions with a camera height")
                     m.undo(); m.undo(); m.undo(); m.undo(); m.undo(); m.undo()
                 }
+                // --- 1.2: camera / sound for a selected stretch, shots framed on their own, ↑ / ↓ to cuts ---
+                do {
+                    let c0 = m.selectedClip!
+                    let vids = m.project.videoIndices
+                    let L = c0.outputDuration
+                    func ang(_ c: Clip, _ o: Double) -> Int { Schedule.angle(at: c.masterTime(forOutput: o), clip: c, auto: m.auto, project: m.project) }
+                    let camB = vids.count > 1 ? vids[1] : vids[0]
+                    let afterWas = ang(c0, L * 0.75)
+                    m.tlSel = (L * 0.3)...(L * 0.5)
+                    m.cutTo(angle: camB)
+                    let c1 = m.selectedClip!
+                    log("camera for selection: inside \(ang(c1, L * 0.4)) (want \(camB)), after \(ang(c1, L * 0.75)) (was \(afterWas)), before \(ang(c1, L * 0.1)) (was \(ang(c0, L * 0.1))), switches \(c1.switches.map { String(format: "%.2f:%@", $0.time, $0.angle.map(String.init) ?? "auto") })")
+                    let snd = m.project.angles.indices.first { m.project.angles[$0].hasAudio } ?? 0
+                    let sndAfterWas = c1.soundOn(at: c1.masterTime(forOutput: L * 0.75))
+                    m.audioPreset(snd)
+                    let c2 = m.selectedClip!
+                    log("sound for selection: inside \(c2.soundOn(at: c2.masterTime(forOutput: L * 0.4))) after \(c2.soundOn(at: c2.masterTime(forOutput: L * 0.75))) (was \(sndAfterWas)), before \(c2.soundOn(at: c2.masterTime(forOutput: L * 0.1)))")
+                    m.tlSel = nil
+                    let shots = m.tlPieces
+                    log("shots: " + shots.map { String(format: "%@ %.2f-%.2f", m.project.angles[$0.angle].shortName, $0.outStart, $0.outStart + $0.duration) }.joined(separator: ", "))
+                    m.engine.seek(0.01); m.jumpEditPoint(next: true); let j1 = m.engine.time
+                    m.jumpEditPoint(next: true); let j2 = m.engine.time
+                    m.jumpEditPoint(next: false)
+                    log(String(format: "down arrow: %.2f then %.2f, up back to %.2f; cuts %@", j1, j2, m.engine.time, m.editPoints().map { String(format: "%.2f", $0) }.joined(separator: " ")))
+                    if let pc = shots.first {
+                        m.engine.seek(pc.outStart + pc.duration / 2)
+                        m.frameScope = .shot
+                        var f = m.framing(of: pc); f.zoom = 1.8; f.x = 0.3
+                        m.setShotFraming(pc, f)
+                        let c3 = m.selectedClip!
+                        let other = Schedule.pieces(project: m.project, clip: c3, auto: m.auto).first { $0.angle == pc.angle && $0.outStart > pc.outStart + 0.01 }
+                        log(String(format: "shot framing: this shot zoom %.2f, camera zoom %.2f, later same-camera shot %@", m.framing(of: pc).zoom, c3.framing(for: pc.angle).zoom,
+                                   other.map { String(format: "zoom %.2f", c3.framing(forShotFrom: $0.masterStart, to: $0.masterStart + $0.duration, angle: $0.angle).zoom) } ?? "none"))
+                        let b = try CompositionBuilder.build(project: m.project, clip: c3, auto: m.auto, loaded: m.sources, format: c3.format)
+                        log("composition: \(b.videoComposition.instructions.count) instructions, \(b.pieces.count) shots")
+                        m.engine.seek(pc.outStart + pc.duration * 0.5)
+                        m.bladeAtPlayhead()
+                        let halves = m.tlPieces.filter { $0.angle == pc.angle && $0.outStart >= pc.outStart - 0.001 && $0.outStart < pc.outStart + pc.duration - 0.01 }
+                        log("blade inside the shot: \(halves.count) shots, own framing \(halves.map { m.shotHasOwnFraming($0) })")
+                        let back = try Store.decoder.decode(Project.self, from: Store.encoder.encode(m.project))
+                        log("shot framing after reload: \(back.clips.first { $0.id == m.selectedClipID }?.shotFraming?.count ?? 0)")
+                        m.frameScope = .camera
+                        m.undo(); m.undo()
+                        log("after undo: shot framing \(m.selectedClip?.shotFraming?.count ?? 0)")
+                    }
+                    m.undo(); m.undo()
+                    log("after undo: switches \(m.selectedClip?.switches.count ?? -1), sound changes \(m.selectedClip?.soundChanges.count ?? -1)")
+                }
             }
             m.zoomTimeline(by: 4, around: 2)
             log(String(format: "zoom %.1f start %.2f visible %.2f", m.tlZoom, m.tlStart, m.tlVisible))

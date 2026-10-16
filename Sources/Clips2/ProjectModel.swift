@@ -65,6 +65,13 @@ final class ProjectModel: ObservableObject {
     /// A caption being moved / re-timed on the timeline.
     @Published var captionDrag: CaptionDrag? = nil
     var captionCache: (key: String, items: [CaptionItem])? = nil
+    /// What framing changes apply to: every shot from the camera, or just the shot at the playhead.
+    enum FrameScope: String { case camera, shot }
+    @Published var frameScope: FrameScope = .camera
+    /// The "Adjust framing" pop-over (also opened from the timeline's right-click menu).
+    @Published var showFraming = false
+    /// How many windows show this project. With none (Claude working on it in the background) it stays silent.
+    var viewers = 0 { didSet { engine.player.isMuted = viewers <= 0 } }
 
     let engine = PlayerEngine()
     private var undoStack: [Project] = []
@@ -79,6 +86,7 @@ final class ProjectModel: ObservableObject {
         self.project = p
         self.fullMix = p.defaultMix
         engine.onTick = { [weak self] t in self?.tick(t) }
+        engine.player.isMuted = true      // until a window shows it
     }
 
     var selectedClip: Clip? {
@@ -963,11 +971,37 @@ final class ProjectModel: ObservableObject {
 
     // MARK: - Angles & audio
 
+    /// The stretches (master time) a camera or sound choice applies to: the timeline selection, or the selected words.
+    /// nil = no selection (then a choice applies from the playhead on).
+    func choiceRanges() -> [(Double, Double)]? {
+        guard let c = selectedClip else { return nil }
+        if let sel = tlSel {
+            // one stretch from the first kept moment to the last: parts already cut out in between are never seen or heard,
+            // so covering them keeps it to a single change in and a single change out
+            let segs = masterSegments(c, sel.lowerBound, sel.upperBound)
+            guard let a = segs.first?.0, let b = segs.last?.1 else { return nil }
+            return [(a, b)]
+        }
+        let ws = project.words
+        if let sel = selection, sel.upperBound < ws.count {
+            let a = max(c.start, ws[sel.lowerBound].start - 0.05), b = min(c.end, ws[sel.upperBound].end + 0.05)
+            if b > a { return [(a, b)] }
+        }
+        return nil
+    }
+
     /// Cut to an angle at the playhead (nil = back to automatic). Works live while playing.
+    /// With a stretch selected on the timeline (or words selected), only that stretch changes.
     func cutTo(angle: Int?) {
         if selectedClip == nil {
             fullViewAngle = angle
             rebuild()
+            return
+        }
+        if let ranges = choiceRanges() {
+            updateClip { c in for (a, b) in ranges { c.setCamera(angle, from: a, to: b) } }
+            let name = angle.map { project.angles[$0].shortName } ?? "automatic"
+            notice = "Camera \(name) for the selected \(fmtSpan(ranges.reduce(0) { $0 + $1.1 - $1.0 }))."
             return
         }
         let m = masterTime(engine.time)
@@ -1002,26 +1036,21 @@ final class ProjectModel: ObservableObject {
     }
 
     func applySound(_ on: [Bool]) {
-        guard let c0 = selectedClip else {
+        guard selectedClip != nil else {
             var m = fullMix; m.ensure(project.angles.count); m.on = on; fullMix = m; applyMix(); return
         }
-        let ws = project.words
-        var selRange: (Double, Double)? = nil
-        if let sel = selection, sel.upperBound < ws.count {
-            let a = max(c0.start, ws[sel.lowerBound].start - 0.05), b = min(c0.end, ws[sel.upperBound].end + 0.05)
-            if b > a { selRange = (a, b) }
+        let n = project.angles.count
+        if let ranges = choiceRanges() {
+            updateClip(rebuild: false) { c in c.audio.ensure(n); c.setSound(on, ranges: ranges) }
+            applyMix()
+            notice = "Sound: \(soundLabel(project, on)) for the selected \(fmtSpan(ranges.reduce(0) { $0 + $1.1 - $1.0 }))."
+            return
         }
         let m = masterTime(engine.time)
-        let n = project.angles.count
         updateClip(rebuild: false) { c in
             c.audio.ensure(n)
             var sw = c.soundChanges
-            if let (a, b) = selRange {
-                let after = c.soundOn(at: b)
-                sw.removeAll { $0.time >= a - 0.02 && $0.time <= b + 0.02 }
-                sw.append(AudioSwitch(time: a, on: on))
-                if b < c.end - 0.05 { sw.append(AudioSwitch(time: b, on: after)) }
-            } else if m <= c.start + 0.1 {
+            if m <= c.start + 0.1 {
                 c.audio.on = on
                 sw.removeAll { $0.time <= c.start + 0.1 }
             } else {

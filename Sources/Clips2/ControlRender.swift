@@ -205,9 +205,9 @@ extension Control {
         }),
         ControlCommand(id: "export.status", label: "Export Progress", menu: "Toolbar ▸ Export (progress ring)",
                        enabled: { _ in true },
-                       run: { app, _ in exportStatus(app.current) }),
+                       run: { app, _ in exportStatus(app.claude) }),
         ControlCommand(id: "export.reveal", label: "Show Last Export in Finder", menu: "Notice ▸ Show in Finder",
-                       enabled: { $0.current != nil },
+                       enabled: { $0.claude != nil },
                        run: { app, _ in
             let m = try model(app)
             m.revealLastExport()

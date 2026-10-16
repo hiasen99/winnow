@@ -126,6 +126,51 @@ extension Control {
         throw ControlError("Say which speaker: number (1 = first) or current name. Speakers: " + p.speakers.map { $0.name }.joined(separator: ", ") + ".")
     }
 
+    /// The shot (one camera between two cuts) containing master time t.
+    static func shot(_ m: ProjectModel, _ c: Clip, at t: Double) throws -> EditPiece {
+        let pcs = Schedule.pieces(project: m.project, clip: c, auto: m.auto)
+        guard let pc = pcs.first(where: { t >= $0.masterStart - 1e-4 && t < $0.masterStart + $0.duration })
+                ?? pcs.last(where: { abs($0.masterStart + $0.duration - t) < 1e-3 }) else {
+            throw ControlError("No shot at \(fmtTime(t, frac: true)) in \"\(c.title)\" (that moment isn't in the clip). clip_inspect lists the shots.")
+        }
+        return pc
+    }
+
+    /// framing.set with "shot": frame one shot on its own.
+    static func frameShot(_ m: ProjectModel, _ c: Clip, _ a: Args) throws -> String {
+        guard let t = a.num("shot") else { throw ControlError("'shot' is a time in the recording (seconds) inside the shot.") }
+        let pc = try shot(m, c, at: t)
+        let span = "\(fmtTime(pc.masterStart, frac: true))–\(fmtTime(pc.masterStart + pc.duration, frac: true))"
+        let cam = angleName(pc.angle, m.project)
+        if a.bool("reset") == true {
+            change(m, c.id) { clip in
+                if let k = clip.shotFramingIndex(start: pc.masterStart, end: pc.masterStart + pc.duration, angle: pc.angle) {
+                    clip.shotFraming?.remove(at: k)
+                    if clip.shotFraming?.isEmpty == true { clip.shotFraming = nil }
+                }
+            }
+            return "The \(cam) shot at \(span) uses camera \(cam)'s framing again."
+        }
+        if a.has("captionHeight") { throw ControlError("Caption height is set per camera, not per shot: use framing.set with camera and captionHeight.") }
+        var f = c.framing(forShotFrom: pc.masterStart, to: pc.masterStart + pc.duration, angle: pc.angle)
+        if let z = a.num("zoom") { f.zoom = min(2.5, max(1, z)) }
+        let lim = m.framingLimits(angle: pc.angle, format: c.format, zoom: f.zoom)
+        if let u = a.num("leftRight") { f.x = lim.x.upperBound - min(1, max(0, u)) * (lim.x.upperBound - lim.x.lowerBound) }
+        if let u = a.num("downUp") { f.y = lim.y.lowerBound + min(1, max(0, u)) * (lim.y.upperBound - lim.y.lowerBound) }
+        f.x = min(lim.x.upperBound, max(lim.x.lowerBound, f.x)); f.y = min(lim.y.upperBound, max(lim.y.lowerBound, f.y))
+        let set = f
+        change(m, c.id) { clip in
+            var list = clip.shotFraming ?? []
+            if let k = clip.shotFramingIndex(start: pc.masterStart, end: pc.masterStart + pc.duration, angle: pc.angle) {
+                list[k].x = set.x; list[k].y = set.y; list[k].zoom = set.zoom
+            } else {
+                list.append(ShotFraming(time: pc.masterStart + pc.duration / 2, angle: pc.angle, x: set.x, y: set.y, zoom: set.zoom))
+            }
+            clip.shotFraming = list
+        }
+        return "The \(cam) shot at \(span) in \"\(c.title)\" has its own framing: zoom \(String(format: "%.2f", set.zoom))×, centre x \(String(format: "%.2f", set.x)) y \(String(format: "%.2f", set.y)). Other \(cam) shots keep the camera's framing."
+    }
+
     static func newClip(_ m: ProjectModel, _ a: Args) throws -> Clip {
         let p = m.project
         guard let s0 = a.num("start"), let e0 = a.num("end"), e0 > s0 else {
@@ -318,21 +363,11 @@ extension Control {
             let from = a.num("from").map { max(c.start, $0) }, to = a.num("to").map { min(c.end, $0) }
             if let f = from, let t = to, t <= f { throw ControlError("'to' has to be after 'from'.") }
             change(m, c.id) { clip in
-                var sw = clip.switches.sorted { $0.time < $1.time }
                 if from == nil && to == nil {
-                    sw = cam.map { [AngleSwitch(time: clip.start, angle: $0)] } ?? []
+                    clip.switches = cam.map { [AngleSwitch(time: clip.start, angle: $0)] } ?? []
                 } else {
-                    let f = from ?? clip.start, t = to ?? clip.end
-                    let after = angleAt(clip, t)
-                    sw.removeAll { $0.time >= f - 0.02 && $0.time <= t + 0.02 }
-                    sw.append(AngleSwitch(time: f, angle: cam))
-                    if t < clip.end - 0.05 { sw.append(AngleSwitch(time: t, angle: after)) }
+                    clip.setCamera(cam, from: from ?? clip.start, to: to ?? clip.end)
                 }
-                sw.sort { $0.time < $1.time }
-                var cleaned: [AngleSwitch] = []
-                for s in sw where cleaned.isEmpty || cleaned.last!.angle != s.angle { cleaned.append(s) }
-                while let first = cleaned.first, first.angle == nil { cleaned.removeFirst() }
-                clip.switches = cleaned
             }
             return ["clip": clipRef(m, c.id),
                     "cameraSwitches": (m.project.clips.first { $0.id == c.id }?.switches ?? []).map { s -> [String: Any] in
@@ -373,20 +408,7 @@ extension Control {
             change(m, c.id) { clip in
                 clip.audio.ensure(n)
                 if from == nil && to == nil { clip.audio.on = on; clip.audioSwitches = nil; return }
-                let f = from ?? clip.start, t = to ?? clip.end
-                let after = clip.soundOn(at: t)
-                var sw = clip.soundChanges
-                sw.removeAll { $0.time >= f - 0.02 && $0.time <= t + 0.02 }
-                if f <= clip.start + 0.05 { clip.audio.on = on } else { sw.append(AudioSwitch(time: f, on: on)) }
-                if t < clip.end - 0.05 { sw.append(AudioSwitch(time: t, on: after)) }
-                sw = sw.filter { $0.time > clip.start + 0.01 && $0.time < clip.end - 0.01 }.sorted { $0.time < $1.time }
-                var cleaned: [AudioSwitch] = []
-                var cur = clip.audio.on
-                for s in sw {
-                    let next = s.on ?? clip.audio.on
-                    if next != cur { cleaned.append(AudioSwitch(time: s.time, on: next)); cur = next }
-                }
-                clip.audioSwitches = cleaned.isEmpty ? nil : cleaned
+                clip.setSound(on, ranges: [(from ?? clip.start, to ?? clip.end)])
             }
             let cl = m.project.clips.first { $0.id == c.id } ?? c
             return ["clip": clipRef(m, c.id), "sound": heard(cl.audio.on, m.project),
@@ -406,11 +428,12 @@ extension Control {
         // Framing
 
         ControlCommand(id: "framing.set", label: "Adjust Framing", menu: "Clip inspector ▸ Adjust framing…", changesProject: true,
-                       params: "{clip?, camera: \"A\"…, leftRight?: 0…1 (0 = Left end of the slider, 0.5 centred, 1 = Right: the picture moves right), downUp?: 0…1 (1 = picture moves up), zoom?: 1…2.5, captionHeight?: 0.15…0.85 (centre of the captions while this camera is showing, fraction of the frame from the top) or \"style\" (use the caption style's height), reset?: true (centre + zoom only)}",
+                       params: "{clip?, camera: \"A\"…, leftRight?: 0…1 (0 = Left end of the slider, 0.5 centred, 1 = Right: the picture moves right), downUp?: 0…1 (1 = picture moves up), zoom?: 1…2.5, captionHeight?: 0.15…0.85 (centre of the captions while this camera is showing, fraction of the frame from the top) or \"style\" (use the caption style's height), reset?: true (centre + zoom only); shot?: recording seconds of any moment in one shot (see clip_inspect 'shots') → frames only that shot, camera not needed; with shot, reset: true puts that shot back on its camera's framing}",
                        enabled: { hasClips($0) },
                        run: { app, a in
             let m = try model(app)
             let c = try targetClip(m, a)
+            if a.has("shot") { return try frameShot(m, c, a) }
             guard let i = try cameraIndex(m.project, a.d["camera"]) else { throw ControlError("Pick one camera for framing.") }
             var f = a.bool("reset") == true ? c.framing(for: i).pictureReset : c.framing(for: i)
             if let s = a.str("captionHeight"), ["style", "default", "none", "reset"].contains(s.lowercased()) { f.captionY = nil }
@@ -447,7 +470,7 @@ extension Control {
 
         ControlCommand(id: "speaker.rename", label: "Rename Speaker", menu: "Speakers & Sync", changesProject: true,
                        params: "{speaker: number (1 = first) or current name, name}",
-                       enabled: { !($0.current?.project.speakers.isEmpty ?? true) },
+                       enabled: { !($0.claude?.project.speakers.isEmpty ?? true) },
                        run: { app, a in
             let m = try model(app)
             let i = try speakerIndex(m.project, a.d["speaker"])
@@ -458,7 +481,7 @@ extension Control {
         }),
         ControlCommand(id: "speaker.camera", label: "Speaker's Camera", menu: "Speakers & Sync", changesProject: true,
                        params: "{speaker: number or name, camera: \"A\"…} (the camera automatic switching cuts to when this person talks)",
-                       enabled: { !($0.current?.project.speakers.isEmpty ?? true) },
+                       enabled: { !($0.claude?.project.speakers.isEmpty ?? true) },
                        run: { app, a in
             let m = try model(app)
             let i = try speakerIndex(m.project, a.d["speaker"])

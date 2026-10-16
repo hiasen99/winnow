@@ -68,7 +68,7 @@ enum CompositionBuilder {
             vTracks[i] = comp.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
         }
         // which output ranges each angle is visible in
-        var visible: [(CMTimeRange, Int)] = []
+        var visible: [(CMTimeRange, EditPiece)] = []
         for piece in pieces {
             guard let l = loaded[piece.angle], let src = l.video, let track = vTracks[piece.angle] else { continue }
             let a = p.angles[piece.angle]
@@ -77,7 +77,7 @@ enum CompositionBuilder {
             guard s1 > s0 + 0.001 else { continue }
             let outAt = piece.outStart + (s0 - (piece.masterStart + a.offset))
             try track.insertTimeRange(range(s0, s1), of: src, at: t(outAt))
-            visible.append((range(piece.outStart, piece.outStart + piece.duration), piece.angle))
+            visible.append((range(piece.outStart, piece.outStart + piece.duration), piece))
         }
 
         // audio: every angle's sound runs the whole clip; the mix decides what you hear
@@ -110,13 +110,15 @@ enum CompositionBuilder {
         let fps = min(60, max(24, loaded.compactMap { $0?.fps }.max() ?? 30))
         vc.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps.rounded()))
         var instructions: [AVMutableVideoCompositionInstruction] = []
-        for (r, angle) in visible {
+        for (r, piece) in visible {
+            let angle = piece.angle
             let ins = AVMutableVideoCompositionInstruction()
             ins.timeRange = r
             ins.backgroundColor = CGColor(gray: 0, alpha: 1)
             if let track = vTracks[angle], let l = loaded[angle] {
                 let li = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-                let framing = clip?.framing(for: angle) ?? Framing()
+                // the shot's own framing if it has one, else the camera's
+                let framing = clip?.framing(forShotFrom: piece.masterStart, to: piece.masterStart + piece.duration, angle: angle) ?? Framing()
                 li.setTransform(placement(l, render: render, framing: fmt == nil ? Framing() : framing), at: r.start)
                 ins.layerInstructions = [li]
             }
@@ -199,7 +201,7 @@ enum CompositionBuilder {
             let p = AVMutableAudioMixInputParameters(track: track)
             var prev = isOn(segs[0].on, i) ? gain(i) * k : 0
             p.setVolume(prev, at: .zero)
-            var lastEnd = 0.0
+            var lastEnd = 0.001
             for sg in segs.dropFirst() {
                 let v = isOn(sg.on, i) ? gain(i) * k : 0
                 if v != prev {
@@ -208,7 +210,10 @@ enum CompositionBuilder {
                         p.setVolumeRamp(fromStartVolume: prev, toEndVolume: v, timeRange: range(a, b))
                         lastEnd = b
                     } else {
-                        p.setVolume(v, at: t(sg.out))
+                        // changes closer together than a fade: a step, never inside the previous ramp
+                        let at = max(sg.out, lastEnd + 0.001)
+                        p.setVolume(v, at: t(at))
+                        lastEnd = at + 0.001
                     }
                     prev = v
                 }

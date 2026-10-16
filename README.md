@@ -14,11 +14,12 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
   suggests standalone moments. Use your own Claude API key, or copy the prompt into a
   Claude chat and paste the answer back — no key needed.
 - **Edit on a real timeline.** Final Cut-style timeline with trimming, blade, markers,
-  snapping and skimming. Cameras switch automatically to whoever is speaking, with
-  manual overrides per section. Pick which mics you hear, per clip.
-- **Frame each camera.** Move and zoom each camera's picture inside the vertical,
-  square or wide frame, and give each camera its own caption height so captions stay
-  clear of faces and mics.
+  snapping and skimming. Cameras switch automatically to whoever is speaking. Select any
+  stretch and pick a camera or the mics you hear for exactly that stretch, and use ↑ / ↓
+  to jump from cut to cut.
+- **Frame each camera, or each shot.** Move and zoom each camera's picture inside the
+  vertical, square or wide frame, reframe a single shot when someone moves, and give each
+  camera its own caption height so captions stay clear of faces and mics.
 - **Captions that are easy to fix.** Captions are blocks on the timeline: drag to move,
   drag edges to re-time, double-click to fix the text. Style presets for the look.
 - **Review fast.** Mark clips Used (U) or Rejected (X) and jump to the next.
@@ -38,7 +39,9 @@ Open the disk image and drag Winnow to Applications.
   Add an API key from [console.anthropic.com](https://console.anthropic.com) in
   Winnow → Settings. It's stored only on your Mac.
 - **Claude desktop can work in Winnow directly** through MCP: read projects and
-  transcripts, make and trim clips, fix captions and export. Add this to Claude's MCP
+  transcripts, make and trim clips, fix captions and export. Winnow runs in the
+  background while Claude works, on its own project, so your window never changes
+  underneath you (open the same project and you work on it together, live). Add this to Claude's MCP
   settings and restart Claude:
 
   ```json

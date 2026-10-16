@@ -97,8 +97,9 @@ enum Control {
     // MARK: Lookups
 
     static func model(_ app: AppState) throws -> ProjectModel {
-        guard let m = app.current else {
-            throw ControlError("No project is open. Run command project.open with {\"project\": name or number from project_list}.")
+        guard let m = app.claude else {
+            let w = app.current.map { " (Samuel's window has \"\($0.project.name)\" open; opening that one shares it live, opening another keeps your work separate from his)" } ?? ""
+            throw ControlError("You don't have a project open. Run command project.open with {\"project\": name or number from project_list}" + w + ".")
         }
         return m
     }
@@ -144,17 +145,24 @@ enum Control {
 
     static func appInfo() -> [String: Any] {
         var d: [String: Any] = ["app": "Winnow", "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "dev"]
-        d["projectOpen"] = AppState.shared?.current?.project.name ?? "none"
+        let app = AppState.shared
+        d["projectOpen"] = app?.claude?.project.name ?? "none"
+        d["windowProject"] = app?.current?.project.name ?? "none (home screen)"
+        if let c = app?.claude { d["sharedWithWindow"] = c === app?.current }
+        d["window"] = !Background.primaryWindows.isEmpty ? "showing" : "none (command app.show opens it)"
+        d["claudeWindow"] = Background.claudeWindowShowing
+        d["dockIcon"] = !Background.isBackground
         return d
     }
 
     static func projectList() -> [[String: Any]] {
-        let open = AppState.shared?.current?.folder
+        let open = AppState.shared?.claude?.folder
+        let inWindow = AppState.shared?.current?.folder
         let iso = ISO8601DateFormatter()
         return Store.list().enumerated().map { i, s -> [String: Any] in
             ["number": i + 1, "id": s.folder.lastPathComponent, "name": s.name, "clips": s.clips,
              "length": r3(s.duration), "stage": s.stage.rawValue, "created": iso.string(from: s.created),
-             "open": s.folder == open]
+             "open": s.folder == open, "inSamuelsWindow": s.folder == inWindow]
         }
     }
 
@@ -192,10 +200,10 @@ enum Control {
 
     static func inspect(_ app: AppState) -> [String: Any] {
         var out: [String: Any] = ["app": appInfo()]
-        guard let m = app.current else {
+        guard let m = app.claude else {
             out["open"] = false
             out["projects"] = projectList()
-            out["hint"] = "No project is open. Run command project.open with {\"project\": name or number}."
+            out["hint"] = "You don't have a project open. Run command project.open with {\"project\": name or number}. It opens in the background: Samuel's window doesn't change (if it's the project in his window, you share it live)."
             return out
         }
         let p = m.project
@@ -240,6 +248,15 @@ enum Control {
         d["sound"] = heard(c.audio.on, p)
         d["soundChanges"] = c.soundChanges.map { s -> [String: Any] in
             ["time": r3(s.time), "hear": s.on.map { heard($0, p) as Any } ?? "the clip's own sound"]
+        }
+        d["shotsNote"] = "Shots: each stretch of one camera between cuts (start/end in the recording, out = in the finished clip). 'ownFraming' = framed on its own (framing.set with shot)."
+        d["shots"] = Schedule.pieces(project: p, clip: c, auto: m.auto).map { pc -> [String: Any] in
+            var e: [String: Any] = ["start": r3(pc.masterStart), "end": r3(pc.masterStart + pc.duration), "out": r3(pc.outStart),
+                                    "camera": angleName(pc.angle, p)]
+            if let k = c.shotFramingIndex(start: pc.masterStart, end: pc.masterStart + pc.duration, angle: pc.angle), let s = c.shotFraming?[k] {
+                e["ownFraming"] = ["x": r3(s.x), "y": r3(s.y), "zoom": r3(s.zoom)]
+            }
+            return e
         }
         d["framing"] = p.videoIndices.map { i -> [String: Any] in
             let f = c.framing(for: i)
@@ -303,12 +320,12 @@ enum Control {
             throw ControlError("No command \"\(id)\"." + (near.isEmpty ? " command_list shows them all." : " Did you mean: " + near.joined(separator: ", ") + "?"))
         }
         guard c.enabled(app) else {
-            throw ControlError("\(c.id) can't run right now" + (app.current == nil ? " (no project is open)." : "."))
+            throw ControlError("\(c.id) can't run right now" + (app.claude == nil ? " (you don't have a project open: project.open)." : "."))
         }
         Log.write("control: run \(id)")
         let r = try await c.run(app, a)
         var out: [String: Any] = ["command": id, "result": r ?? "done"]
-        if let m = app.current { out["state"] = state(m) }
+        if let m = app.claude { out["state"] = state(m) }
         return out
     }
 
@@ -332,12 +349,35 @@ enum Control {
         return out
     }
 
-    static func hasProject(_ app: AppState) -> Bool { app.current != nil }
-    static func hasClips(_ app: AppState) -> Bool { !(app.current?.project.clips.isEmpty ?? true) }
+    static func hasProject(_ app: AppState) -> Bool { app.claude != nil }
+    static func hasClips(_ app: AppState) -> Bool { !(app.claude?.project.clips.isEmpty ?? true) }
 
     static let commands: [ControlCommand] = baseCommands + editCommands + captionCommands + renderCommands
 
     static let baseCommands: [ControlCommand] = [
+        ControlCommand(id: "app.show", label: "Show Winnow Window", menu: "Open Winnow (Dock, Finder, Spotlight)",
+                       params: "{which?: \"claude\" (default: your project's window when it's a different project from Samuel's, else his main window) | \"main\"}",
+                       enabled: { _ in true },
+                       run: { app, a in
+            let separate = app.claude != nil && app.claude !== app.current
+            let which = a.str("which")?.lowercased() ?? (separate ? "claude" : "main")
+            if which == "claude" {
+                guard separate else { Background.show(); return "You're working on the project in Samuel's main window; showed that window." }
+                Background.showClaude()
+                for _ in 0..<30 where !Background.claudeWindowShowing { try await Task.sleep(nanoseconds: 100_000_000) }
+                return Background.claudeWindowShowing ? "Your project is showing in the \"\(ClaudeWindowRoot.title)\" window (Samuel's window is unchanged)."
+                    : "Asked for the \"\(ClaudeWindowRoot.title)\" window; it should appear in a moment."
+            }
+            Background.show()
+            for _ in 0..<30 where Background.primaryWindows.isEmpty { try await Task.sleep(nanoseconds: 100_000_000) }
+            return !Background.primaryWindows.isEmpty ? "The Winnow window is showing." : "Asked for the window; it should appear in a moment."
+        }),
+        ControlCommand(id: "app.hide", label: "Hide Winnow Windows (keep running)", menu: "Close the window",
+                       enabled: { _ in true },
+                       run: { _, _ in
+            Background.hide()
+            return "Closed the windows. Winnow keeps running in the background; your project stays open."
+        }),
         ControlCommand(id: "project.open", label: "Open Project", menu: "Home screen",
                        params: "{project: name, number from project_list, or id}",
                        enabled: { _ in true },
@@ -355,22 +395,24 @@ enum Control {
                 else if hits.count > 1 { throw ControlError("Several projects match \"\(s)\": " + hits.map { "\"\($0.name)\"" }.joined(separator: ", ")) }
             }
             guard let pr = hit else { throw ControlError("No project matches \"\(s)\". project_list shows them.") }
-            if app.current?.folder == pr.folder { return "\"\(pr.name)\" is already open." }
-            if app.current != nil { app.close() }
-            app.open(pr.folder)
-            guard let m = app.current else { throw ControlError(app.errorText ?? "Couldn't open it.") }
+            if app.claude?.folder == pr.folder { return "\"\(pr.name)\" is already open." }
+            let m: ProjectModel
+            do { m = try app.openForClaude(pr.folder) } catch { throw ControlError("Couldn't open it: \(error.localizedDescription)") }
             for _ in 0..<300 {
                 if !m.loaded.isEmpty && m.busy == nil { break }
                 try await Task.sleep(nanoseconds: 100_000_000)
             }
-            return "Opened \"\(pr.name)\"." + (m.busy.map { " Still working: \($0)" } ?? "")
+            let where_ = m === app.current ? " It's the project in Samuel's window, so you're sharing it: he sees your edits as you make them (avoid clip.select / playhead.seek / transport, they move his view)."
+                : " It's open in the background; Samuel's window doesn't change."
+            return "Opened \"\(pr.name)\"." + where_ + (m.busy.map { " Still working: \($0)" } ?? "")
         }),
         ControlCommand(id: "project.close", label: "Close Project", menu: "Breadcrumb ▸ back to projects",
                        enabled: { hasProject($0) },
                        run: { app, _ in
-            let n = app.current?.project.name ?? ""
-            app.close()
-            return "Closed \"\(n)\"."
+            let n = app.claude?.project.name ?? ""
+            let shared = app.claude === app.current
+            app.closeClaude()
+            return "Closed \"\(n)\"." + (shared ? " (It stays open in Samuel's window.)" : "")
         }),
         ControlCommand(id: "project.create", label: "New Project from Files", menu: "Home screen ▸ Choose Files… / drop files",
                        params: "{files: [full paths: up to 4 videos + up to 4 audio files], name?: project name}",
@@ -393,11 +435,10 @@ enum Control {
             if !odd.isEmpty { throw ControlError("Not a video or audio file: " + odd.map { $0.lastPathComponent }.joined(separator: ", ")) }
             let n = a.str("name")?.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = (n?.isEmpty == false) ? n! : defaultProjectName(videos[0])
-            if app.current != nil { app.close() }
             let folder = try Store.create(name: name, files: videos + audios)
             app.refresh()
-            app.open(folder)
-            guard let m = app.current else { throw ControlError(app.errorText ?? "Created it but couldn't open it.") }
+            let m: ProjectModel
+            do { m = try app.openForClaude(folder) } catch { throw ControlError("Created it but couldn't open it: \(error.localizedDescription)") }
             for _ in 0..<50 {
                 if !m.loaded.isEmpty { break }
                 try await Task.sleep(nanoseconds: 100_000_000)
@@ -409,7 +450,7 @@ enum Control {
                        params: "{name}",
                        enabled: { hasProject($0) },
                        run: { app, a in
-            guard let m = app.current else { throw ControlError("No project is open.") }
+            guard let m = app.claude else { throw ControlError("No project is open.") }
             guard let n = a.str("name")?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty else {
                 throw ControlError("Pass {\"name\": \"new name\"}.")
             }
@@ -472,10 +513,10 @@ enum Control {
             return "Timeline zoom \(String(format: "%.1f", m.tlZoom))×."
         }),
         ControlCommand(id: "edit.undo", label: "Undo", menu: "Edit ▸ Undo", key: "⌘Z", changesProject: true,
-                       enabled: { $0.current?.canUndo ?? false },
+                       enabled: { $0.claude?.canUndo ?? false },
                        run: { app, _ in try model(app).undo(); return "Undone." }),
         ControlCommand(id: "edit.redo", label: "Redo", menu: "Edit ▸ Redo", key: "⇧⌘Z", changesProject: true,
-                       enabled: { $0.current?.canRedo ?? false },
+                       enabled: { $0.claude?.canRedo ?? false },
                        run: { app, _ in try model(app).redo(); return "Redone." }),
     ]
 }

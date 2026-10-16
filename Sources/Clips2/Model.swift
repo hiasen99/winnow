@@ -136,6 +136,18 @@ struct Framing: Codable, Hashable {
     var pictureReset: Framing { Framing(captionY: captionY) }
 }
 
+/// A shot framed on its own (step: per-shot framing). A shot is one stretch of one camera between cuts
+/// (camera changes, cut-out parts, blade points). `time` is a moment inside the shot (master time):
+/// the override belongs to whichever stretch of camera `angle` contains it, so small timing changes keep it.
+/// Only the picture is overridden; the caption height still comes from the camera's framing.
+struct ShotFraming: Codable, Hashable {
+    var time: Double
+    var angle: Int
+    var x: Double = 0.5
+    var y: Double = 0.5
+    var zoom: Double = 1.0
+}
+
 struct AudioMix: Codable, Hashable {
     var on: [Bool]
     var gainDB: [Double]
@@ -203,6 +215,8 @@ struct Clip: Codable, Identifiable, Hashable {
     /// Captions edited by hand (moved, re-timed, retyped, split…). nil = made automatically from the transcript.
     /// Transcript words not covered by any of these still get automatic captions (e.g. after the clip is made longer).
     var captionBlocks: [CaptionBlock]? = nil
+    /// Shots framed on their own, overriding the camera's framing for just that shot. (optional so older projects still load)
+    var shotFraming: [ShotFraming]? = nil
 
     var start: Double { ranges.first?.start ?? 0 }
     var end: Double { ranges.last?.end ?? 0 }
@@ -228,6 +242,63 @@ struct Clip: Codable, Identifiable, Hashable {
     }
 
     func framing(for angle: Int) -> Framing { angle < framing.count ? framing[angle] : Framing() }
+
+    /// The override for the shot of camera `angle` covering master [start, end), if it has one.
+    func shotFramingIndex(start: Double, end: Double, angle: Int) -> Int? {
+        guard let list = shotFraming else { return nil }
+        return list.indices.last { list[$0].angle == angle && list[$0].time >= start - 1e-4 && list[$0].time < end - 1e-4 }
+    }
+    /// How a shot is framed: its own picture if it has one, otherwise the camera's; the caption height is always the camera's.
+    func framing(forShotFrom start: Double, to end: Double, angle: Int) -> Framing {
+        var f = framing(for: angle)
+        if let i = shotFramingIndex(start: start, end: end, angle: angle), let s = shotFraming?[i] {
+            f.x = s.x; f.y = s.y; f.zoom = s.zoom
+        }
+        return f
+    }
+
+    /// Use camera `angle` (nil = automatic) for master [a, b); whatever was showing at `b` carries on after it.
+    mutating func setCamera(_ angle: Int?, from a: Double, to b: Double) {
+        let sorted = switches.sorted { $0.time < $1.time }
+        let after = sorted.last(where: { $0.time <= b + 1e-6 })?.angle
+        var sw = sorted.filter { $0.time < a - 0.001 || $0.time > b + 0.001 }
+        sw.append(AngleSwitch(time: a, angle: angle))
+        if b < end - 0.02 { sw.append(AngleSwitch(time: b, angle: after)) }
+        switches = Clip.tidy(sw)
+    }
+    /// Sorted, no switch that changes nothing, no leading "automatic" (that's the default anyway).
+    static func tidy(_ list: [AngleSwitch]) -> [AngleSwitch] {
+        var cleaned: [AngleSwitch] = []
+        for s in list.sorted(by: { $0.time < $1.time }) {
+            if let last = cleaned.last, abs(last.time - s.time) < 0.001 { cleaned[cleaned.count - 1] = s; continue }
+            cleaned.append(s)
+        }
+        var out: [AngleSwitch] = []
+        for s in cleaned where out.isEmpty || out.last!.angle != s.angle { out.append(s) }
+        while let first = out.first, first.angle == nil { out.removeFirst() }
+        return out
+    }
+
+    /// Hear `on` during master [a, b) (several stretches at once); what was heard at each end carries on after it.
+    mutating func setSound(_ on: [Bool], ranges: [(Double, Double)]) {
+        var sw = soundChanges
+        for (a0, b0) in ranges {
+            let a = max(start, a0), b = min(end, b0)
+            guard b > a + 0.005 else { continue }
+            let after = soundOn(at: b)
+            sw.removeAll { $0.time >= a - 0.02 && $0.time <= b + 0.02 }
+            if a <= start + 0.05 { audio.on = on } else { sw.append(AudioSwitch(time: a, on: on)) }
+            if b < end - 0.05 { sw.append(AudioSwitch(time: b, on: after)) }
+        }
+        sw = sw.filter { $0.time > start + 0.01 && $0.time < end - 0.01 }.sorted { $0.time < $1.time }
+        var cleaned: [AudioSwitch] = []
+        var cur = audio.on
+        for s in sw {
+            let next = s.on ?? audio.on
+            if next != cur { cleaned.append(AudioSwitch(time: s.time, on: next)); cur = next }
+        }
+        audioSwitches = cleaned.isEmpty ? nil : cleaned
+    }
 
     var soundChanges: [AudioSwitch] { (audioSwitches ?? []).sorted { $0.time < $1.time } }
 

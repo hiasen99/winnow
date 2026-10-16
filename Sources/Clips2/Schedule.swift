@@ -94,11 +94,14 @@ enum Schedule {
     }
 
     /// Breaks a clip (or the whole recording when clip == nil) into pieces, one angle each.
+    /// Each piece is a "shot": blade points start a new one even on the same camera, so a shot can be framed on its own.
     static func pieces(project p: Project, clip: Clip?, auto: [AngleSegment]) -> [EditPiece] {
         let ranges = clip?.ranges ?? [TimeRange(start: 0, end: p.masterDuration)]
         var cutPoints = Set<Double>()
         for s in auto { cutPoints.insert(s.start); cutPoints.insert(s.end) }
         for sw in clip?.switches ?? [] { cutPoints.insert(sw.time) }
+        let blades = clip?.splits ?? []
+        for s in blades { cutPoints.insert(s) }
         for a in p.angles where a.isVideo { cutPoints.insert(a.masterStart); cutPoints.insert(a.masterEnd) }
         let sortedCuts = cutPoints.sorted()
 
@@ -112,7 +115,8 @@ enum Schedule {
                 let a = bounds[i], b = bounds[i + 1]
                 let mid = (a + b) / 2
                 let ang = angle(at: mid, clip: clip, auto: auto, project: p)
-                if var last = out.last, last.angle == ang,
+                let isBlade = blades.contains { abs($0 - a) < 1e-4 }
+                if var last = out.last, last.angle == ang, !isBlade,
                    abs(last.masterStart + last.duration - a) < 1e-6 {
                     last.duration += b - a; out[out.count - 1] = last
                 } else {

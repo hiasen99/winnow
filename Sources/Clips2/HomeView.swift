@@ -6,6 +6,8 @@ struct HomeView: View {
     @State private var targeted = false
     @State private var renaming: ProjectSummary? = nil
     @State private var newName = ""
+    @State private var selection: Set<URL> = []
+    @State private var toDelete: [URL] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,14 +21,35 @@ struct HomeView: View {
             dropZone.padding(.horizontal, 28)
 
             if !app.projects.isEmpty {
-                Text("Your projects").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 6)
-                List {
+                HStack(spacing: 10) {
+                    Text("Your projects").font(.headline)
+                    Spacer()
+                    if !selection.isEmpty {
+                        Text("\(selection.count) selected").font(.callout).foregroundStyle(.secondary)
+                        Button("Deselect") { selection = [] }.buttonStyle(.borderless)
+                        Button(role: .destructive) { askToDelete(Array(selection)) } label: {
+                            Label("Move to Trash", systemImage: "trash")
+                        }
+                        .help("Move the selected projects to the Trash (Delete key)")
+                    } else if app.projects.count > 1 {
+                        Text("⌘-click or ⇧-click to select several").font(.caption).foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(minHeight: 24)
+                .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 6)
+                List(selection: $selection) {
                     ForEach(app.projects) { p in
                         HStack(spacing: 14) {
                             Image(systemName: "film.stack").font(.title2).foregroundStyle(Brand.green)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(p.name).font(.body.weight(.semibold))
+                                HStack(spacing: 6) {
+                                    Text(p.name).font(.body.weight(.semibold))
+                                    if app.claude?.folder == p.folder {
+                                        Label("Claude is working on this", systemImage: "sparkles")
+                                            .font(.caption).foregroundStyle(Brand.gold)
+                                            .help("Claude has this project open. Open it to work on it together: you'll see each other's edits live.")
+                                    }
+                                }
                                 Text("\(p.created.formatted(date: .abbreviated, time: .shortened))  ·  \(fmtTime(p.duration))  ·  \(p.clips) clip\(p.clips == 1 ? "" : "s")\(p.stage == .transcribed ? "" : "  ·  not finished analysing")")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -36,28 +59,68 @@ struct HomeView: View {
                             Button("Open") { app.open(p.folder) }
                         }
                         .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                        .onTapGesture(count: 2) { app.open(p.folder) }
-                        .contextMenu {
-                            Button("Open") { app.open(p.folder) }
-                            Button("Rename…") { newName = p.name; renaming = p }
-                            Button("Show project folder in Finder") { NSWorkspace.shared.activateFileViewerSelecting([p.folder]) }
-                            Divider()
-                            Button("Move to Trash", role: .destructive) { Store.delete(p.folder); app.refresh() }
-                        }
+                        .tag(p.folder)
                     }
                 }
                 .listStyle(.inset)
+                .contextMenu(forSelectionType: URL.self) { picked in
+                    let ps = app.projects.filter { picked.contains($0.folder) }
+                    if ps.count == 1, let p = ps.first {
+                        Button("Open") { app.open(p.folder) }
+                        Button("Rename…") { newName = p.name; renaming = p }
+                        Button("Show project folder in Finder") { NSWorkspace.shared.activateFileViewerSelecting([p.folder]) }
+                        Divider()
+                        Button("Move to Trash", role: .destructive) { askToDelete([p.folder]) }
+                    } else if ps.count > 1 {
+                        Button("Show \(ps.count) project folders in Finder") { NSWorkspace.shared.activateFileViewerSelecting(ps.map(\.folder)) }
+                        Divider()
+                        Button("Move \(ps.count) Projects to Trash", role: .destructive) { askToDelete(ps.map(\.folder)) }
+                    }
+                } primaryAction: { picked in
+                    // double-click or Return opens (only makes sense for one project)
+                    if picked.count == 1, let f = picked.first { app.open(f) }
+                }
+                .onDeleteCommand { if !selection.isEmpty { askToDelete(Array(selection)) } }
             } else {
                 Spacer()
             }
+        }
+        .onChange(of: app.projects) { _, list in
+            // drop selections of projects that are gone
+            let ids = Set(list.map(\.folder))
+            selection = selection.intersection(ids)
         }
         .alert("Rename project", isPresented: renameAlert) {
             TextField("Project name", text: $newName)
             Button("Rename") { if let r = renaming { app.rename(r.folder, to: newName) }; renaming = nil }
             Button("Cancel", role: .cancel) { renaming = nil }
         } message: { Text("This is also the name of the folder exports are suggested in.") }
+        .confirmationDialog(deleteTitle, isPresented: deleteAlert) {
+            Button(toDelete.count == 1 ? "Move to Trash" : "Move \(toDelete.count) to Trash", role: .destructive) {
+                app.delete(toDelete)
+                selection.subtract(toDelete)
+                toDelete = []
+            }
+            Button("Cancel", role: .cancel) { toDelete = [] }
+        } message: {
+            Text("Your camera and audio files aren't touched. Only Winnow's project (clips, captions and edits) goes to the Trash, so you can still put it back from there.")
+        }
     }
+
+    func askToDelete(_ folders: [URL]) {
+        guard !folders.isEmpty else { return }
+        // keep the list order so the dialog names them as they appear
+        toDelete = app.projects.map(\.folder).filter { folders.contains($0) }
+    }
+
+    var deleteTitle: String {
+        if toDelete.count == 1, let p = app.projects.first(where: { $0.folder == toDelete[0] }) {
+            return "Move \u{201C}\(p.name)\u{201D} to the Trash?"
+        }
+        return "Move \(toDelete.count) projects to the Trash?"
+    }
+
+    var deleteAlert: Binding<Bool> { Binding(get: { !toDelete.isEmpty }, set: { if !$0 { toDelete = [] } }) }
 
     var renameAlert: Binding<Bool> { Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }) }
 

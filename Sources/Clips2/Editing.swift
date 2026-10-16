@@ -76,8 +76,9 @@ extension ProjectModel {
         return pts.sorted()
     }
 
-    /// Up / down arrows: previous / next edit point (like Final Cut).
+    /// Up / down arrows: previous / next cut (camera change, block edge or blade point), like Final Cut.
     func jumpEditPoint(next: Bool) {
+        if engine.isPlaying { engine.pause() }
         let t = engine.time
         let pts = editPoints()
         if next { if let p = pts.first(where: { $0 > t + 0.01 }) { engine.seek(min(p, tlDuration)) } }
@@ -137,14 +138,26 @@ extension ProjectModel {
         }
         let m = c.masterTime(forOutput: engine.time)
         guard c.ranges.contains(where: { m > $0.start + 0.05 && m < $0.end - 0.05 }) else { return }
-        updateClip(rebuild: false) { $0.splits = ($0.splits ?? []) + [m] }
+        // a shot framed on its own keeps that framing on both sides of the new cut
+        let shot = shotAtPlayhead
+        updateClip { clip in
+            clip.splits = (clip.splits ?? []) + [m]
+            if let pc = shot, let k = clip.shotFramingIndex(start: pc.masterStart, end: pc.masterStart + pc.duration, angle: pc.angle),
+               var list = clip.shotFraming {
+                let s = list[k]
+                list[k].time = (pc.masterStart + m) / 2
+                var copy = s; copy.time = (m + pc.masterStart + pc.duration) / 2
+                list.append(copy)
+                clip.shotFraming = list
+            }
+        }
     }
 
     /// Removes the blade split at an edit point (output time), joining the two blocks again.
     func joinSplit(atOutput t: Double) {
         guard let c = selectedClip else { return }
         let m = c.masterTime(forOutput: t)
-        updateClip(rebuild: false) { clip in clip.splits?.removeAll { abs($0 - m) < 0.02 } }
+        updateClip { clip in clip.splits?.removeAll { abs($0 - m) < 0.02 } }
     }
 
     /// Fills the gap at an edit point (puts back what was cut between two blocks).
@@ -451,34 +464,79 @@ extension ProjectModel {
     }
 
     /// The camera on screen at the playhead.
-    var angleOnScreen: Int? {
-        tlPieces.last(where: { $0.outStart <= engine.time + 1e-4 })?.angle
+    var angleOnScreen: Int? { shotAtPlayhead?.angle }
+
+    /// The shot (one camera between two cuts) at the playhead.
+    var shotAtPlayhead: EditPiece? {
+        guard selectedClip != nil else { return nil }
+        return tlPieces.last(where: { $0.outStart <= engine.time + 1e-4 })
+    }
+
+    func shotHasOwnFraming(_ pc: EditPiece) -> Bool {
+        selectedClip?.shotFramingIndex(start: pc.masterStart, end: pc.masterStart + pc.duration, angle: pc.angle) != nil
+    }
+    /// How a shot looks right now (its own framing, or its camera's).
+    func framing(of pc: EditPiece) -> Framing {
+        selectedClip?.framing(forShotFrom: pc.masterStart, to: pc.masterStart + pc.duration, angle: pc.angle) ?? Framing()
+    }
+
+    /// Dragging in the viewer and the framing sliders change this shot only (rather than every shot from its camera):
+    /// when the shot already has its own framing, or "This shot" is picked.
+    func framesShot(_ pc: EditPiece) -> Bool { shotHasOwnFraming(pc) || frameScope == .shot }
+
+    /// Gives a shot its own framing (made from the camera's framing the first time). Live: one undo step per gesture.
+    func setShotFraming(_ pc: EditPiece, _ f: Framing) {
+        updateClipLive { c in
+            var list = c.shotFraming ?? []
+            if let k = c.shotFramingIndex(start: pc.masterStart, end: pc.masterStart + pc.duration, angle: pc.angle) {
+                list[k].x = f.x; list[k].y = f.y; list[k].zoom = f.zoom
+            } else {
+                list.append(ShotFraming(time: pc.masterStart + pc.duration / 2, angle: pc.angle, x: f.x, y: f.y, zoom: f.zoom))
+            }
+            c.shotFraming = list
+        }
+    }
+    /// The shot goes back to its camera's framing.
+    func removeShotFraming(_ pc: EditPiece) {
+        updateClip { c in
+            guard let k = c.shotFramingIndex(start: pc.masterStart, end: pc.masterStart + pc.duration, angle: pc.angle) else { return }
+            c.shotFraming?.remove(at: k)
+            if c.shotFraming?.isEmpty == true { c.shotFraming = nil }
+        }
+    }
+    func removeAllShotFraming() { updateClip { $0.shotFraming = nil } }
+
+    /// Changes the framing of the shot at the playhead, or of its camera, whichever `framesShot` says.
+    func setFramingAtPlayhead(_ f: Framing) {
+        guard let pc = shotAtPlayhead else { return }
+        if framesShot(pc) { setShotFraming(pc, f) } else { setFraming(pc.angle, f) }
     }
 
     /// Dragging the picture in the viewer: it follows the mouse. `dx`, `dy` in view points (y up), `k` = view points per render pixel.
     func dragFraming(dx: CGFloat, dy: CGFloat, k: CGFloat) {
-        guard let c = selectedClip, let a = angleOnScreen, a < sources.count, let l = sources[a] else { return }
-        var f = c.framing(for: a)
+        guard let c = selectedClip, let pc = shotAtPlayhead, pc.angle < sources.count, let l = sources[pc.angle] else { return }
+        let a = pc.angle
+        var f = framing(of: pc)
         let render = c.format.renderSize
         let W = max(1, l.naturalSize.width), H = max(1, l.naturalSize.height)
         let s = max(render.width / W, render.height / H) * CGFloat(max(1, f.zoom))
         let lim = framingLimits(angle: a, format: c.format, zoom: f.zoom)
         f.x = min(lim.x.upperBound, max(lim.x.lowerBound, min(lim.x.upperBound, max(lim.x.lowerBound, f.x)) - Double(dx / max(0.0001, k) / (W * s))))
         f.y = min(lim.y.upperBound, max(lim.y.lowerBound, min(lim.y.upperBound, max(lim.y.lowerBound, f.y)) + Double(dy / max(0.0001, k) / (H * s))))
-        setFraming(a, f)
+        setFramingAtPlayhead(f)
     }
 
     func pinchFraming(_ m: CGFloat) {
-        guard let c = selectedClip, let a = angleOnScreen else { return }
-        var f = c.framing(for: a)
+        guard let pc = shotAtPlayhead else { return }
+        var f = framing(of: pc)
         f.zoom = min(2.5, max(1, f.zoom * Double(1 + m)))
-        setFraming(a, f)
+        setFramingAtPlayhead(f)
     }
 
     /// Can the picture be moved in the viewer right now?
     var canDragFraming: Bool {
-        guard let c = selectedClip, let a = angleOnScreen else { return false }
-        let lim = framingLimits(angle: a, format: c.format, zoom: c.framing(for: a).zoom)
+        guard let c = selectedClip, let pc = shotAtPlayhead else { return false }
+        let lim = framingLimits(angle: pc.angle, format: c.format, zoom: framing(of: pc).zoom)
         return lim.x.upperBound - lim.x.lowerBound > 0.001 || lim.y.upperBound - lim.y.lowerBound > 0.001
     }
 

@@ -102,8 +102,9 @@ enum Store {
         return f.presets.first { $0.name == n }?.style
     }
 
-    static func delete(_ folder: URL) {
-        try? FileManager.default.trashItem(at: folder, resultingItemURL: nil)
+    @discardableResult
+    static func delete(_ folder: URL) -> Bool {
+        (try? FileManager.default.trashItem(at: folder, resultingItemURL: nil)) != nil
     }
 
     // envelopes are small: keep them for re-running speaker detection

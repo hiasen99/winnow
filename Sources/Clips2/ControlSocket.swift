@@ -129,7 +129,9 @@ final class ControlServer: @unchecked Sendable {
         req.params = obj["params"]
         let sem = DispatchSemaphore(value: 0)
         Task { @MainActor in
+            Background.lastRequest = Date()
             req.reply = await Control.handle(req.method, req.params)
+            Background.lastRequest = Date()
             sem.signal()
         }
         sem.wait()
@@ -139,7 +141,8 @@ final class ControlServer: @unchecked Sendable {
     }
 }
 
-/// The MCP side's way in: connect (starting Clips 2 if it isn't running), send one request, read the reply.
+/// The MCP side's way in: connect (starting Winnow in the background, with no window, if it isn't running),
+/// send one request, read the reply.
 enum ControlClient {
     static func connectOnce() -> Int32? {
         let s = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -156,7 +159,7 @@ enum ControlClient {
         if let s = connectOnce() { return s }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        p.arguments = ["-g", "-b", "com.samuelroys.clips2"]
+        p.arguments = ["-g", "-b", "com.samuelroys.clips2", "--args", "--background"]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try? p.run(); p.waitUntilExit()

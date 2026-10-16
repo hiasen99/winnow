@@ -5,7 +5,7 @@ import Foundation
 /// (ControlClient starts Clips 2 in the background if it isn't open).
 enum MCPServer {
 
-    static let version = "0.2"
+    static let version = "0.4"
 
     static var instructions: String {
         """
@@ -13,12 +13,20 @@ enum MCPServer {
         with automatic camera switching by speaker, styled captions and a Final Cut-style timeline.
         Times: clip start/end, transcript times and "recording" times are seconds in the full synced recording; \
         caption times and the playhead inside a clip are seconds into the finished clip.
-        Start with project_inspect (it lists projects if none is open). command_list shows every command with its parameters; \
+        When Claude starts Winnow it runs with no window or Dock icon; everything works the same. \
+        You have your own open project, separate from the one in the person's window: project.open never changes their window. \
+        If you open the project that's in their window you share it live (one copy, one undo history); then avoid clip.select, \
+        playhead.seek and transport.*, which move their view. Your own project makes no sound. \
+        command_run app.show opens your project in a "Claude's Project" window (or the main window when you share it); app.hide closes the windows. \
+        With no window and no requests for 15 minutes it quits, so a later call may find no project open: run project.open again.
+        Start with project_inspect (it lists projects if you have none open, and says which one is in the person's window). command_list shows every command with its parameters; \
         command_run runs one, command_batch several. Edits are one Undo step each (edit.undo).
         Edits work on any clip ("clip": number, id or title; default the one showing) without changing what's on screen.
         To find clips: read transcript_read, pick complete standalone moments (strong opening line, one idea, clean ending),         then add them all at once with command_run clip.createMany. Check a clip's captions with clip_inspect; \
         fix them with caption.setText / caption.setTexts (by caption number), caption.split / join / retime, \
         and a misheard name everywhere with text.replace. caption.style changes the look for the whole project.
+        camera.set and sound.set take from/to (recording seconds) to change exactly one stretch. clip_inspect lists the clip's shots \
+        (one camera between cuts); framing.set with shot: <seconds inside it> frames that one shot on its own (when someone moves).
         render_frame shows a frame exactly as it will export, so check your changes with it. \
         export.video / export.audio / export.srt export clips (also "used" for every clip marked used) in the background; export.status follows them.
         """

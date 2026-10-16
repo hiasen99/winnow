@@ -5,6 +5,8 @@ import AppKit
 struct ProjectView: View {
     @EnvironmentObject var app: AppState
     @ObservedObject var model: ProjectModel
+    /// Shown in the "Claude's Project" window (Claude's own project, separate from yours).
+    var isClaudeWindow = false
     @State private var showFinder = false
     @State private var showStyle = false
     @AppStorage("transcriptFont") var transcriptFont: Double = 15
@@ -63,8 +65,16 @@ struct ProjectView: View {
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                Button { app.close() } label: { Label("Projects", systemImage: "chevron.left") }
-                    .help("Back to your projects")
+                if isClaudeWindow {
+                    HStack(spacing: 5) {
+                        Image(systemName: "sparkles").foregroundStyle(Brand.gold)
+                        Text("Claude is working on this").font(.callout).foregroundStyle(.secondary)
+                    }
+                    .help("Claude's own project. Edits here go into the same project Claude is working on. Closing this window doesn't stop Claude.")
+                } else {
+                    Button { app.close() } label: { Label("Projects", systemImage: "chevron.left") }
+                        .help("Back to your projects")
+                }
             }
             ToolbarItem(placement: .principal) {
                 Breadcrumb(model: model)
@@ -91,8 +101,9 @@ struct ProjectView: View {
             Task { await model.addFiles(urls) }
             return true
         }
-        .onAppear { keys.install(model) }
-        .onDisappear { keys.remove() }
+        .background(WindowReader { keys.window = $0 })
+        .onAppear { keys.install(model); model.viewers += 1 }
+        .onDisappear { keys.remove(); model.viewers -= 1 }
         .sheet(isPresented: $showFinder) { FindClipsSheet(model: model) }
         .sheet(isPresented: $model.showSpeakers) { SpeakersSheet(model: model) }
 
@@ -361,18 +372,22 @@ struct AngleButtons: View {
         let now = currentAngle
         let auto = isAuto
         let inClip = model.selectedClip != nil
+        let forSel = inClip && (model.tlSel != nil || model.selection != nil)
         HStack(spacing: 8) {
-            Text("Camera").font(.caption).foregroundStyle(.secondary).fixedSize()
+            Text(forSel ? "Camera for selection" : "Camera").font(.caption)
+                .foregroundStyle(forSel ? Brand.green : Color.secondary).fixedSize()
+                .help(forSel ? "A camera you pick now is used for exactly the selected stretch; the camera after it stays as it was." : "")
             HStack(spacing: 2) {
                 seg("Auto", selected: auto, live: false, color: Brand.green,
-                    help: inClip ? "From the playhead on, follow whoever is talking (0)" : "Follow whoever is talking (0)") {
+                    help: forSel ? "Follow whoever is talking for the selected stretch (0)" : inClip ? "From the playhead on, follow whoever is talking (0)" : "Follow whoever is talking (0)") {
                     model.cutTo(angle: nil)
                 }
                 ForEach(Array(model.project.videoIndices.enumerated()), id: \.element) { k, i in
                     let a = model.project.angles[i]
                     let showing = now == i
                     seg(a.shortName, selected: !auto && showing, live: auto && showing, color: angleColors[i % angleColors.count],
-                        help: (inClip ? "Cut to \(a.name) at the playhead (\(k + 1)). Works while playing."
+                        help: (forSel ? "Show \(a.name) for the selected stretch (\(k + 1))"
+                               : inClip ? "Cut to \(a.name) at the playhead (\(k + 1)). Works while playing. Select a stretch on the timeline first to change just that part."
                                       : "Watch \(a.name) (\(k + 1))") + (auto && showing ? "\nAuto is showing this camera right now." : "")) {
                         model.cutTo(angle: i)
                     }
@@ -424,8 +439,10 @@ struct AudioButtons: View {
         let lit = sources.filter { mix.isOn($0) }
         let isDefault = mix.on == p.defaultMix.on
         let inClip = model.selectedClip != nil
+        let forSel = inClip && (model.tlSel != nil || model.selection != nil)
         HStack(spacing: 8) {
-            Text("Sound").font(.caption).foregroundStyle(.secondary).fixedSize()
+            Text(forSel ? "Sound for selection" : "Sound").font(.caption)
+                .foregroundStyle(forSel ? Brand.green : Color.secondary).fixedSize()
             Circle().fill(lit.isEmpty ? Color.red : (isDefault && lit.count > 1 ? Brand.green : soundColor(p, mix.on)))
                 .frame(width: 8, height: 8)
             Menu {
@@ -451,7 +468,8 @@ struct AudioButtons: View {
             }
             .fixedSize()
             .controlSize(.small)
-            .help(inClip ? "What you hear. In a clip, a change applies to the selected words, or from the playhead on." : "What you hear")
+            .help(forSel ? "What you hear at the playhead. A choice now applies to exactly the selected stretch."
+                  : inClip ? "What you hear. In a clip, a change applies from the playhead on. Select a stretch on the timeline first to change just that part." : "What you hear")
             Button { showMixer.toggle() } label: { Image(systemName: "slider.horizontal.3") }
                 .help("Fine-tune each source's level")
                 .popover(isPresented: $showMixer) { MixerPopover(model: model).padding(16).frame(width: 300) }
@@ -560,10 +578,13 @@ struct TranscriptHeader: View {
 /// Single-key shortcuts (space, 1/2, 0, C, Delete…) that work anywhere except while typing in a text box.
 final class KeyMonitor {
     private var token: Any?
+    /// The window this project is shown in: only its key presses are handled (Claude's project can be in a second window).
+    weak var window: NSWindow?
     func install(_ model: ProjectModel) {
         remove()
-        token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak model] e in
+        token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak model, weak self] e in
             guard let model else { return e }
+            if let w = self?.window, e.window !== w { return e }
             if let tv = e.window?.firstResponder as? NSTextView, tv.isEditable { return e }   // typing
             if e.window?.attachedSheet != nil || NSApp.modalWindow != nil { return e }
             if e.window?.isSheet == true { return e }
@@ -602,8 +623,8 @@ func handleKey(_ model: ProjectModel, _ e: NSEvent) -> Bool {
         if model.selectedClip != nil, let id = model.selectedCaption { model.editingCaption = id; return true }
         if model.selection != nil { model.beginEditingText(); return true }
         return false
-    case 125, 126:                                                                 // down / up: next / previous edit point
-        if e.window?.firstResponder is NSTableView { return false }               // (the clip list uses arrows)
+    case 125, 126:                                                                 // down / up: next / previous cut
+        // (even when the clip list has focus: ⌘↑ / ⌘↓ change clips)
         model.jumpEditPoint(next: e.keyCode == 125); return true
     case 123: model.engine.step(frames: shift ? -10 : -1); return true             // left
     case 124: model.engine.step(frames: shift ? 10 : 1); return true               // right
