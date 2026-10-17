@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import CoreGraphics
 import AVFoundation
 import QuartzCore
 
@@ -135,6 +137,44 @@ enum SelfTest {
             try await Exporter.export(project: m.project, clip: h, auto: m.auto, loaded: m.loaded,
                                       to: outDir.appendingPathComponent("selftest-169.mp4")) { _ in }
             log("exported 16:9 version")
+            // zoomed out below 1×: whole picture in a 9:16 frame with a blurred copy behind (Core Image compositor)
+            do {
+                var z = c; z.format = .vertical; z.captions = true
+                let fit = m.fitZoom(angle: 0, format: .vertical)
+                z.framing = m.project.angles.indices.map { _ in Framing(x: 0.5, y: 0.5, zoom: fit) }
+                let zb = try CompositionBuilder.build(project: m.project, clip: z, auto: m.auto, loaded: m.sources, format: .vertical)
+                log(String(format: "zoomed out: fit %.3f, range %.3f-%.1f, compositor %@, %d instructions", fit,
+                           m.zoomRange(angle: 0, format: .vertical).lowerBound, m.zoomRange(angle: 0, format: .vertical).upperBound,
+                           zb.videoComposition.customVideoCompositorClass == nil ? "built-in" : "blur", zb.videoComposition.instructions.count))
+                func probe(_ img: CGImage) -> String {
+                    let w = img.width, h = img.height
+                    var px = [UInt8](repeating: 0, count: w * h * 4)
+                    let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+                    func lum(_ x: Int, _ y: Int) -> Int { let k = (y * w + x) * 4; return (Int(px[k]) + Int(px[k + 1]) + Int(px[k + 2])) / 3 }
+                    return "\(w)x\(h) top \(lum(w / 2, 4)) centre \(lum(w / 2, h / 2)) bottom \(lum(w / 2, h - 5))"
+                }
+                for cap in [false, true] {
+                    let img = try await Exporter.frame(project: m.project, clip: z, auto: m.auto, loaded: m.sources, at: 1.0, captions: cap, maxSide: 960)
+                    log("zoomed-out frame (captions \(cap)): " + probe(img))
+                    if let dest = CGImageDestinationCreateWithURL(outDir.appendingPathComponent("zoomout-\(cap ? "cap" : "plain").png") as CFURL, "public.png" as CFString, 1, nil) {
+                        CGImageDestinationAddImage(dest, img, nil); CGImageDestinationFinalize(dest)
+                    }
+                }
+                var z2 = z; z2.framing = m.project.angles.indices.map { _ in Framing(x: 0.5, y: 0.2, zoom: 0.6) }
+                let img2 = try await Exporter.frame(project: m.project, clip: z2, auto: m.auto, loaded: m.sources, at: 1.0, captions: false, maxSide: 960)
+                log("zoomed-out 0.6 moved up: " + probe(img2))
+                if let dest = CGImageDestinationCreateWithURL(outDir.appendingPathComponent("zoomout-06.png") as CFURL, "public.png" as CFString, 1, nil) {
+                    CGImageDestinationAddImage(dest, img2, nil); CGImageDestinationFinalize(dest)
+                }
+                let t2 = Date()
+                try await Exporter.export(project: m.project, clip: z, auto: m.auto, loaded: m.loaded,
+                                          to: outDir.appendingPathComponent("selftest-zoomout.mp4")) { _ in }
+                log(String(format: "exported zoomed-out 9:16 with captions in %.1fs", Date().timeIntervalSince(t2)))
+                let lim = m.framingLimits(angle: 0, format: .vertical, zoom: 0.6)
+                log(String(format: "framing limits 9:16 zoom 0.6: x %.3f-%.3f y %.3f-%.3f", lim.x.lowerBound, lim.x.upperBound, lim.y.lowerBound, lim.y.upperBound))
+            }
             try await Exporter.exportAudio(project: m.project, clip: c, auto: m.auto, loaded: m.loaded,
                                            to: outDir.appendingPathComponent("selftest-audio.m4a"), wav: false) { _ in }
             try await Exporter.exportAudio(project: m.project, clip: c, auto: m.auto, loaded: m.loaded,
@@ -370,6 +410,27 @@ enum SelfTest {
             try Captions.srt(words: words, style: m.project.captionStyle, renderSize: c.format.renderSize, total: c.outputDuration)
                 .write(to: outDir.appendingPathComponent("selftest-clip.srt"), atomically: true, encoding: .utf8)
             try Store.encoder.encode(m.project).write(to: outDir.appendingPathComponent("project.json"))
+            // changing the framing rebuilds the preview: the playhead must stay where it was
+            if let sc = m.selectedClip, m.engine.duration > 2 {
+                let mid = m.engine.duration * 0.6
+                m.engine.seek(mid)
+                try await Task.sleep(nanoseconds: 400_000_000)
+                let old = sc.framing(for: 0)
+                for z in [0.9, 0.7, 0.5] {          // like dragging the slider
+                    var f = old; f.zoom = z
+                    m.setFraming(0, f)
+                    try await Task.sleep(nanoseconds: 60_000_000)
+                }
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                log(String(format: "playhead after framing changes: %.2f (was %.2f) %@", m.engine.time, mid, abs(m.engine.time - mid) < 0.1 ? "kept" : "MOVED"))
+                m.setFraming(0, old)
+            }
+            // typed slider values
+            let sx = SliderParse.side("left", "right"), sz = SliderParse.zoom(fit: 0.316)
+            log("typed: " + [("35% left", sx("35% left")), ("-35", sx("-35")), ("40 right", sx("40 right")), ("0.6", sz("0.6")), ("1.4×", sz("1.4×")),
+                             ("60%", sz("60%")), ("fit", sz("fit")), ("30% down", SliderParse.percentDown("30% down")), ("0.3", SliderParse.percentDown("0.3")),
+                             ("abc", sz("abc"))]
+                .map { "\($0.0)→\($0.1.map { String(format: "%.3f", $0) } ?? "nil")" }.joined(separator: " "))
             Store.delete(folder)
             log("SELFTEST OK")
             return 0

@@ -18,13 +18,18 @@ final class PlayerEngine: ObservableObject {
     private var observer: Any?
     private var rateObs: NSKeyValueObservation?
     private var readyObs: NSKeyValueObservation?
+    /// Where a freshly loaded item is headed. Until that seek lands the new item reports 0:00, and that
+    /// must not overwrite the playhead (or every framing change would send it back to the start).
+    private var loadTarget: Double?
+    private var loadAt = Date.distantPast
+    private var landing: Bool { loadTarget != nil && Date().timeIntervalSince(loadAt) < 3 }
     var onTick: ((Double) -> Void)?
 
     init() {
         player.automaticallyWaitsToMinimizeStalling = false
         observer = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] t in
             MainActor.assumeIsolated {
-                guard let self, !self.skimming else { return }
+                guard let self, !self.skimming, !self.landing else { return }
                 self.time = t.seconds.isFinite ? t.seconds : 0
                 self.onTick?(self.time)
             }
@@ -50,17 +55,31 @@ final class PlayerEngine: ObservableObject {
         renderSize = b.renderSize
         player.replaceCurrentItem(with: item)
         let target = max(0, min(t, max(0, b.duration - 0.05)))
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        let itemID = ObjectIdentifier(item)
+        loadTarget = target
+        loadAt = Date()
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] done in
+            Task { @MainActor in
+                guard let self, done, let cur = self.player.currentItem, ObjectIdentifier(cur) == itemID else { return }
+                self.loadTarget = nil
+            }
+        }
         // a seek made before the item is ready can leave the viewer black until you press play:
         // seek again once it's ready, so the paused frame always shows
-        let itemID = ObjectIdentifier(item)
         readyObs = item.observe(\.status, options: [.new]) { [weak self] it, _ in
             guard it.status == .readyToPlay else { return }
             Task { @MainActor in
                 guard let self, let cur = self.player.currentItem, ObjectIdentifier(cur) == itemID else { return }
                 self.readyObs = nil
-                if self.player.timeControlStatus == .paused, !self.skimming {
-                    self.player.seek(to: CMTime(seconds: self.time, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                // the first seek may have been dropped while the item loaded: go there now (also while playing)
+                if self.loadTarget != nil || (self.player.timeControlStatus == .paused && !self.skimming) {
+                    let to = self.loadTarget ?? self.time
+                    self.player.seek(to: CMTime(seconds: to, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        Task { @MainActor in
+                            guard let self, let cur = self.player.currentItem, ObjectIdentifier(cur) == itemID else { return }
+                            self.loadTarget = nil
+                        }
+                    }
                 }
             }
         }
@@ -72,7 +91,7 @@ final class PlayerEngine: ObservableObject {
     func setMix(_ mix: AVAudioMix) { player.currentItem?.audioMix = mix }
 
     func seek(_ t: Double, exact: Bool = true) {
-        skimming = false; pendingSeek = nil
+        skimming = false; pendingSeek = nil; loadTarget = nil
         let target = max(0, min(t, duration))
         let tol: CMTime = exact ? .zero : CMTime(value: 1, timescale: 10)
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: tol, toleranceAfter: tol)
@@ -88,7 +107,7 @@ final class PlayerEngine: ObservableObject {
 
     /// Dragging the playhead: moves it and shows each frame as fast as the decoder allows.
     func scrub(_ t: Double) {
-        skimming = false
+        skimming = false; loadTarget = nil
         time = max(0, min(t, duration))
         queueSeek(time)
     }

@@ -446,14 +446,31 @@ extension ProjectModel {
 
     // MARK: - Framing
 
-    /// Centre positions that keep the frame filled (no black edges), for an angle at a zoom.
-    func framingLimits(angle i: Int, format: ClipFormat, zoom: Double) -> (x: ClosedRange<Double>, y: ClosedRange<Double>) {
-        guard i < sources.count, let l = sources[i] else { return (0...1, 0...1) }
+    /// Half the frame's width / height measured in camera pictures at a zoom (above 0.5 = the picture is smaller than the frame that way).
+    func framingHalf(angle i: Int, format: ClipFormat, zoom: Double) -> (x: Double, y: Double) {
+        guard i < sources.count, let l = sources[i] else { return (0.5, 0.5) }
         let render = format.renderSize
         let W = max(1, l.naturalSize.width), H = max(1, l.naturalSize.height)
-        let s = max(render.width / W, render.height / H) * CGFloat(max(1, zoom))
-        let hx = min(0.5, Double(render.width / (2 * W * s))), hy = min(0.5, Double(render.height / (2 * H * s)))
-        return (hx...(1 - hx), hy...(1 - hy))
+        let s = max(render.width / W, render.height / H) * CGFloat(max(0.05, zoom))
+        return (Double(render.width / (2 * W * s)), Double(render.height / (2 * H * s)))
+    }
+
+    /// Centre positions the framing can take at a zoom. Zoomed in: the ones that keep the frame filled (no edges).
+    /// Zoomed out (picture smaller than the frame): anywhere that keeps the whole picture inside the frame.
+    func framingLimits(angle i: Int, format: ClipFormat, zoom: Double) -> (x: ClosedRange<Double>, y: ClosedRange<Double>) {
+        let h = framingHalf(angle: i, format: format, zoom: zoom)
+        return (min(h.x, 1 - h.x)...max(h.x, 1 - h.x), min(h.y, 1 - h.y)...max(h.y, 1 - h.y))
+    }
+
+    /// Zoom range for a camera in a clip shape (below 1× = zoomed out, blurred copy behind).
+    func zoomRange(angle i: Int, format: ClipFormat) -> ClosedRange<Double> {
+        guard i < sources.count, let l = sources[i] else { return 0.5...CompositionBuilder.maxZoom }
+        return CompositionBuilder.minZoom(source: l.naturalSize, render: format.renderSize)...CompositionBuilder.maxZoom
+    }
+    /// The zoom where the whole camera picture just fits in the frame.
+    func fitZoom(angle i: Int, format: ClipFormat) -> Double {
+        guard i < sources.count, let l = sources[i] else { return 1 }
+        return CompositionBuilder.fitZoom(source: l.naturalSize, render: format.renderSize)
     }
 
     func setFraming(_ i: Int, _ f: Framing) {
@@ -519,7 +536,7 @@ extension ProjectModel {
         var f = framing(of: pc)
         let render = c.format.renderSize
         let W = max(1, l.naturalSize.width), H = max(1, l.naturalSize.height)
-        let s = max(render.width / W, render.height / H) * CGFloat(max(1, f.zoom))
+        let s = max(render.width / W, render.height / H) * CGFloat(max(0.05, f.zoom))
         let lim = framingLimits(angle: a, format: c.format, zoom: f.zoom)
         f.x = min(lim.x.upperBound, max(lim.x.lowerBound, min(lim.x.upperBound, max(lim.x.lowerBound, f.x)) - Double(dx / max(0.0001, k) / (W * s))))
         f.y = min(lim.y.upperBound, max(lim.y.lowerBound, min(lim.y.upperBound, max(lim.y.lowerBound, f.y)) + Double(dy / max(0.0001, k) / (H * s))))
@@ -527,9 +544,13 @@ extension ProjectModel {
     }
 
     func pinchFraming(_ m: CGFloat) {
-        guard let pc = shotAtPlayhead else { return }
+        guard let pc = shotAtPlayhead, let c = selectedClip else { return }
         var f = framing(of: pc)
-        f.zoom = min(2.5, max(1, f.zoom * Double(1 + m)))
+        let zr = zoomRange(angle: pc.angle, format: c.format)
+        let old = f.zoom
+        f.zoom = min(zr.upperBound, max(zr.lowerBound, f.zoom * Double(1 + m)))
+        // a pinch passing through 1× stops there once, so it's easy to get back to "just fills the frame"
+        if (old - 1) * (f.zoom - 1) < 0 { f.zoom = 1 }
         setFramingAtPlayhead(f)
     }
 

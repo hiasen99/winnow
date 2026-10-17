@@ -121,7 +121,8 @@ enum ClipFormat: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// How an angle is framed inside the clip's frame. x/y = centre of the crop (0...1), zoom >= 1.
+/// How an angle is framed inside the clip's frame. x/y = centre of the crop (0...1, can go past when zoomed out),
+/// zoom 1 = fills the frame; below 1 the picture is smaller than the frame with a blurred copy behind it.
 struct Framing: Codable, Hashable {
     var x: Double = 0.5
     var y: Double = 0.5

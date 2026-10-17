@@ -20,7 +20,9 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
   to jump from cut to cut.
 - **Frame each camera, or each shot.** Move and zoom each camera's picture inside the
   vertical, square or wide frame, reframe a single shot when someone moves, and give each
-  camera its own caption height so captions stay clear of faces and mics.
+  camera its own caption height so captions stay clear of faces and mics. Zoom out below
+  1× (or press *Fit* to show a wide camera whole in a vertical clip) and a blurred copy of
+  the picture fills the frame behind it. Click any slider's value to type an exact number.
 - **Captions that are easy to fix.** Captions are blocks on the timeline: drag to move,
   drag edges to re-time, double-click to fix the text. Style presets for the look.
 - **Review fast.** Mark clips Used (U) or Rejected (X) and jump to the next.

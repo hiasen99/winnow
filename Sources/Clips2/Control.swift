@@ -261,6 +261,8 @@ enum Control {
         d["framing"] = p.videoIndices.map { i -> [String: Any] in
             let f = c.framing(for: i)
             var e: [String: Any] = ["camera": angleName(i, p), "x": r3(f.x), "y": r3(f.y), "zoom": r3(f.zoom)]
+            if f.zoom < 0.999 { e["background"] = "blurred copy of the camera (zoomed out)" }
+            e["fitZoom"] = r3(m.fitZoom(angle: i, format: c.format))
             e["captionHeight"] = f.captionY.map { r3($0) as Any } ?? "caption style"
             return e
         }

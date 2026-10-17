@@ -110,6 +110,8 @@ enum CompositionBuilder {
         let fps = min(60, max(24, loaded.compactMap { $0?.fps }.max() ?? 30))
         vc.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps.rounded()))
         var instructions: [AVMutableVideoCompositionInstruction] = []
+        // shots zoomed out below 1× need the Core Image compositor (blurred copy behind the picture)
+        var framed: [ObjectIdentifier: FramedInstruction] = [:]
         for (r, piece) in visible {
             let angle = piece.angle
             let ins = AVMutableVideoCompositionInstruction()
@@ -118,15 +120,28 @@ enum CompositionBuilder {
             if let track = vTracks[angle], let l = loaded[angle] {
                 let li = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
                 // the shot's own framing if it has one, else the camera's
-                let framing = clip?.framing(forShotFrom: piece.masterStart, to: piece.masterStart + piece.duration, angle: angle) ?? Framing()
-                li.setTransform(placement(l, render: render, framing: fmt == nil ? Framing() : framing), at: r.start)
+                let framing = fmt == nil ? Framing() : (clip?.framing(forShotFrom: piece.masterStart, to: piece.masterStart + piece.duration, angle: angle) ?? Framing())
+                let tf = placement(l, render: render, framing: framing)
+                li.setTransform(tf, at: r.start)
                 ins.layerInstructions = [li]
+                framed[ObjectIdentifier(ins)] = FramedInstruction(
+                    timeRange: r, trackID: track.trackID, transform: tf,
+                    background: framing.zoom < 0.999 ? placement(l, render: render, framing: Framing()) : nil,
+                    renderSize: render)
             }
             instructions.append(ins)
         }
         // instructions must cover the whole timeline with no gaps
         instructions = fillGaps(instructions, total: t(total))
-        vc.instructions = instructions
+        if framed.values.contains(where: { $0.background != nil }) {
+            vc.customVideoCompositorClass = FramingCompositor.self
+            vc.instructions = instructions.map { ins in
+                if let f = framed[ObjectIdentifier(ins)] { f.timeRange = ins.timeRange; return f }
+                return FramedInstruction.black(ins.timeRange, renderSize: render)
+            }
+        } else {
+            vc.instructions = instructions
+        }
         return BuiltEdit(composition: comp, videoComposition: vc, audioTracks: aTracks,
                          pieces: pieces, renderSize: render, duration: total)
     }
@@ -162,15 +177,29 @@ enum CompositionBuilder {
         return out
     }
 
-    /// Scale-to-fill the frame, then slide/zoom according to framing.
+    /// Zoom range: below 1× the picture gets smaller than the frame (blurred copy behind it).
+    static let maxZoom = 2.5
+    /// How far out a camera can zoom: at least to 0.5×, and far enough to show the whole picture.
+    static func minZoom(source: CGSize, render: CGSize) -> Double {
+        min(0.5, fitZoom(source: source, render: render))
+    }
+    /// The zoom at which the whole camera picture just fits inside the frame.
+    static func fitZoom(source: CGSize, render: CGSize) -> Double {
+        let W = max(1, source.width), H = max(1, source.height)
+        let fit = min(render.width / W, render.height / H), fill = max(render.width / W, render.height / H)
+        return Double(fit / fill)
+    }
+
+    /// Scale-to-fill the frame, then slide/zoom according to framing. Below 1× the picture is smaller than
+    /// the frame and can slide anywhere inside it.
     static func placement(_ l: LoadedAngle, render: CGSize, framing: Framing) -> CGAffineTransform {
         let W = l.naturalSize.width, H = l.naturalSize.height
-        let s = max(render.width / W, render.height / H) * CGFloat(max(1, framing.zoom))
+        let s = max(render.width / W, render.height / H) * CGFloat(max(0.05, framing.zoom))
         let sw = W * s, sh = H * s
         var tx = render.width / 2 - CGFloat(framing.x) * sw
         var ty = render.height / 2 - CGFloat(framing.y) * sh
-        tx = min(0, max(render.width - sw, tx))
-        ty = min(0, max(render.height - sh, ty))
+        tx = min(max(0, render.width - sw), max(min(0, render.width - sw), tx))
+        ty = min(max(0, render.height - sh), max(min(0, render.height - sh), ty))
         // preferredTransform may move the picture off-origin when it rotates; normalise first
         let rect = CGRect(origin: .zero, size: l.rawSize).applying(l.transform)
         let norm = l.transform.concatenating(CGAffineTransform(translationX: -rect.minX, y: -rect.minY))

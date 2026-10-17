@@ -26,7 +26,8 @@ enum MCPServer {
         fix them with caption.setText / caption.setTexts (by caption number), caption.split / join / retime, \
         and a misheard name everywhere with text.replace. caption.style changes the look for the whole project.
         camera.set and sound.set take from/to (recording seconds) to change exactly one stretch. clip_inspect lists the clip's shots \
-        (one camera between cuts); framing.set with shot: <seconds inside it> frames that one shot on its own (when someone moves).
+        (one camera between cuts); framing.set with shot: <seconds inside it> frames that one shot on its own (when someone moves). \
+        framing.set zoom below 1 (or zoom: "fit") zooms out: the picture gets smaller than the frame with a blurred copy of the camera behind it.
         render_frame shows a frame exactly as it will export, so check your changes with it. \
         export.video / export.audio / export.srt export clips (also "used" for every clip marked used) in the background; export.status follows them.
         """

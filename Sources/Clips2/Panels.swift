@@ -139,6 +139,7 @@ struct FramingPopover: View {
                 Text("\(fmtTime(pc.outStart, frac: true))–\(fmtTime(pc.outStart + pc.duration, frac: true))")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 Spacer()
+                fitButton(clip, i, f) { g in model.setShotFraming(pc, g) }
                 Button("Use camera's") { model.removeShotFraming(pc) }
                     .controlSize(.small).disabled(!own)
                     .help("This shot goes back to the framing every other \(model.project.angles[i].shortName) shot uses")
@@ -160,28 +161,23 @@ struct FramingPopover: View {
         let ux = canX ? (lim.x.upperBound - min(lim.x.upperBound, max(lim.x.lowerBound, f.x))) / (lim.x.upperBound - lim.x.lowerBound) : 0.5
         let uy = canY ? (min(lim.y.upperBound, max(lim.y.lowerBound, f.y)) - lim.y.lowerBound) / (lim.y.upperBound - lim.y.lowerBound) : 0.5
         HStack(alignment: .top, spacing: 12) {
-            FramingMap(source: sourceSize(i), lim: lim, f: f, color: color)
+            FramingMap(source: sourceSize(i), half: model.framingHalf(angle: i, format: clip.format, zoom: f.zoom), f: f, color: color)
                 .frame(width: 96, height: 72)
                 .help("The whole camera picture. The coloured box is the part your clip shows.")
             VStack(alignment: .leading, spacing: 10) {
                 ScaledSlider(title: "Left / right", value: ux, range: 0...1, enabled: canX,
                              ends: ("Left", "Right"), ticks: [0, 0.25, 0.5, 0.75, 1],
                              readout: canX ? sideText(ux, "left", "right") : "no room",
-                             help: canX ? "Slide right and the picture moves right" : "The whole width is already in the frame. Zoom in to move it.",
+                             help: canX ? "Slide right and the picture moves right" : "The whole width is already in the frame. Zoom in or out to move it.",
                              set: { u in var g = f; g.x = lim.x.upperBound - u * (lim.x.upperBound - lim.x.lowerBound); set(g) },
-                             reset: { var g = f; g.x = 0.5; set(g) }, isDefault: abs(f.x - 0.5) < 0.002)
+                             reset: { var g = f; g.x = 0.5; set(g) }, isDefault: abs(f.x - 0.5) < 0.002, parse: SliderParse.side("left", "right"))
                 ScaledSlider(title: "Down / up", value: uy, range: 0...1, enabled: canY,
                              ends: ("Down", "Up"), ticks: [0, 0.25, 0.5, 0.75, 1],
                              readout: canY ? sideText(uy, "down", "up") : "no room",
-                             help: canY ? "Slide right and the picture moves up" : "The whole height is already in the frame. Zoom in to move it.",
+                             help: canY ? "Slide right and the picture moves up" : "The whole height is already in the frame. Zoom in or out to move it.",
                              set: { u in var g = f; g.y = lim.y.lowerBound + u * (lim.y.upperBound - lim.y.lowerBound); set(g) },
-                             reset: { var g = f; g.y = 0.5; set(g) }, isDefault: abs(f.y - 0.5) < 0.002)
-                ScaledSlider(title: "Zoom", value: f.zoom, range: 1...2.5, enabled: true,
-                             ends: ("1×", "2.5×"), ticks: [1, 1.5, 2, 2.5],
-                             readout: String(format: "%.1f×", f.zoom),
-                             help: "Zoom in (or pinch in the viewer)",
-                             set: { v in var g = f; g.zoom = v; set(g) },
-                             reset: { var g = f; g.zoom = 1; set(g) }, isDefault: abs(f.zoom - 1) < 0.002)
+                             reset: { var g = f; g.y = 0.5; set(g) }, isDefault: abs(f.y - 0.5) < 0.002, parse: SliderParse.side("down", "up"))
+                zoomSlider(clip, i, f) { v in var g = f; g.zoom = v; set(g) }
             }
         }
     }
@@ -200,34 +196,30 @@ struct FramingPopover: View {
                 Circle().fill(color).frame(width: 8, height: 8)
                 Text(model.project.angles[i].name).font(.callout.weight(.medium))
                 Spacer()
+                fitButton(clip, i, f) { g in model.setFraming(i, g) }
                 Button("Reset") { model.setFraming(i, f.pictureReset) }
                     .controlSize(.small)
                     .disabled(f.pictureIsDefault)
                     .help("Back to the default: centred, not zoomed")
             }
             HStack(alignment: .top, spacing: 12) {
-                FramingMap(source: sourceSize(i), lim: lim, f: f, color: color)
+                FramingMap(source: sourceSize(i), half: model.framingHalf(angle: i, format: clip.format, zoom: f.zoom), f: f, color: color)
                     .frame(width: 96, height: 72)
                     .help("The whole camera picture. The coloured box is the part your clip shows.")
                 VStack(alignment: .leading, spacing: 10) {
                     ScaledSlider(title: "Left / right", value: ux, range: 0...1, enabled: canX,
                                  ends: ("Left", "Right"), ticks: [0, 0.25, 0.5, 0.75, 1],
                                  readout: canX ? sideText(ux, "left", "right") : "no room",
-                                 help: canX ? "Slide right and the picture moves right" : "The whole width is already in the frame. Zoom in to move it.",
+                                 help: canX ? "Slide right and the picture moves right" : "The whole width is already in the frame. Zoom in or out to move it.",
                                  set: { u in var g = clip.framing(for: i); g.x = lim.x.upperBound - u * (lim.x.upperBound - lim.x.lowerBound); model.setFraming(i, g) },
-                                 reset: { var g = clip.framing(for: i); g.x = 0.5; model.setFraming(i, g) }, isDefault: abs(f.x - 0.5) < 0.002)
+                                 reset: { var g = clip.framing(for: i); g.x = 0.5; model.setFraming(i, g) }, isDefault: abs(f.x - 0.5) < 0.002, parse: SliderParse.side("left", "right"))
                     ScaledSlider(title: "Down / up", value: uy, range: 0...1, enabled: canY,
                                  ends: ("Down", "Up"), ticks: [0, 0.25, 0.5, 0.75, 1],
                                  readout: canY ? sideText(uy, "down", "up") : "no room",
-                                 help: canY ? "Slide right and the picture moves up" : "The whole height is already in the frame. Zoom in to move it.",
+                                 help: canY ? "Slide right and the picture moves up" : "The whole height is already in the frame. Zoom in or out to move it.",
                                  set: { u in var g = clip.framing(for: i); g.y = lim.y.lowerBound + u * (lim.y.upperBound - lim.y.lowerBound); model.setFraming(i, g) },
-                                 reset: { var g = clip.framing(for: i); g.y = 0.5; model.setFraming(i, g) }, isDefault: abs(f.y - 0.5) < 0.002)
-                    ScaledSlider(title: "Zoom", value: f.zoom, range: 1...2.5, enabled: true,
-                                 ends: ("1×", "2.5×"), ticks: [1, 1.5, 2, 2.5],
-                                 readout: String(format: "%.1f×", f.zoom),
-                                 help: "Zoom in on this camera (or pinch in the viewer)",
-                                 set: { v in var g = clip.framing(for: i); g.zoom = v; model.setFraming(i, g) },
-                                 reset: { var g = clip.framing(for: i); g.zoom = 1; model.setFraming(i, g) }, isDefault: abs(f.zoom - 1) < 0.002)
+                                 reset: { var g = clip.framing(for: i); g.y = 0.5; model.setFraming(i, g) }, isDefault: abs(f.y - 0.5) < 0.002, parse: SliderParse.side("down", "up"))
+                    zoomSlider(clip, i, f) { v in var g = clip.framing(for: i); g.zoom = v; model.setFraming(i, g) }
                 }
             }
             // where the captions sit while this camera is showing
@@ -237,11 +229,45 @@ struct FramingPopover: View {
                          readout: f.captionY == nil ? "caption style" : "\(Int(((f.captionY ?? styleY) * 100).rounded()))% down",
                          help: "Move the captions up or down only while this camera is on screen. Reset to use the height from the caption style.",
                          set: { v in var g = clip.framing(for: i); g.captionY = v; model.setFraming(i, g) },
-                         reset: { var g = clip.framing(for: i); g.captionY = nil; model.setFraming(i, g) }, isDefault: f.captionY == nil)
+                         reset: { var g = clip.framing(for: i); g.captionY = nil; model.setFraming(i, g) }, isDefault: f.captionY == nil, parse: SliderParse.percentDown)
                 .padding(.top, 2)
         }
         .padding(10)
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Zoom: 1× fills the frame; below 1× the picture gets smaller with a blurred copy of it behind.
+    @ViewBuilder func zoomSlider(_ clip: Clip, _ i: Int, _ f: Framing, set: @escaping (Double) -> Void) -> some View {
+        let zr = model.zoomRange(angle: i, format: clip.format)
+        let fit = model.fitZoom(angle: i, format: clip.format)
+        let ticks = [zr.lowerBound, 1, 1.5, 2, 2.5] + (fit < 0.98 && fit > zr.lowerBound + 0.02 ? [fit] : [])
+        VStack(alignment: .leading, spacing: 3) {
+            ScaledSlider(title: "Zoom", value: min(zr.upperBound, max(zr.lowerBound, f.zoom)), range: zr, enabled: true,
+                         ends: (String(format: "%.2g×", zr.lowerBound), "2.5×"), ticks: ticks, major: 1,
+                         readout: fit < 0.98 && abs(f.zoom - fit) < 0.005 ? "whole picture" : String(format: f.zoom < 0.999 ? "%.2f×" : "%.1f×", f.zoom),
+                         help: "Zoom in, or slide below 1× to zoom out: the picture gets smaller and a blurred copy of it fills the frame behind. You can pinch in the viewer too.",
+                         set: { v in
+                             // stick at 1× (just fills the frame) and at the whole picture
+                             if abs(v - 1) < 0.03 { set(1) } else if fit < 0.98 && abs(v - fit) < 0.02 { set(fit) } else { set(v) }
+                         },
+                         reset: { set(1) }, isDefault: abs(f.zoom - 1) < 0.002,
+                         parse: SliderParse.zoom(fit: fit), setExact: set)
+            if f.zoom < 0.999 {
+                Label("Blurred copy behind", systemImage: "drop.halffull")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// "Fit": zoom out until the whole camera picture shows (only when it doesn't already, e.g. a wide camera in a tall clip).
+    @ViewBuilder func fitButton(_ clip: Clip, _ i: Int, _ f: Framing, set: @escaping (Framing) -> Void) -> some View {
+        let fit = model.fitZoom(angle: i, format: clip.format)
+        if fit < 0.98 {
+            Button("Fit") { var g = f; g.zoom = fit; g.x = 0.5; g.y = 0.5; set(g) }
+                .controlSize(.small)
+                .disabled(abs(f.zoom - fit) < 0.005 && abs(f.x - 0.5) < 0.002 && abs(f.y - 0.5) < 0.002)
+                .help("Zoom out until the whole camera picture fits in the frame, with a blurred copy of it filling the space behind")
+        }
     }
 
     func sourceSize(_ i: Int) -> CGSize {
@@ -260,7 +286,8 @@ struct FramingPopover: View {
 /// The whole camera frame (grey) with the part the clip uses (coloured box).
 struct FramingMap: View {
     var source: CGSize
-    var lim: (x: ClosedRange<Double>, y: ClosedRange<Double>)
+    /// half the frame in camera pictures (≥ 0.5 = the whole width/height of the picture shows)
+    var half: (x: Double, y: Double)
     var f: Framing
     var color: Color
 
@@ -277,8 +304,9 @@ struct FramingMap: View {
             c.move(to: CGPoint(x: outer.midX, y: outer.minY)); c.addLine(to: CGPoint(x: outer.midX, y: outer.maxY))
             c.move(to: CGPoint(x: outer.minX, y: outer.midY)); c.addLine(to: CGPoint(x: outer.maxX, y: outer.midY))
             ctx.stroke(c, with: .color(.primary.opacity(0.15)), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
-            let cw = min(1, 2 * lim.x.lowerBound), ch = min(1, 2 * lim.y.lowerBound)
-            let cx = min(lim.x.upperBound, max(lim.x.lowerBound, f.x)), cy = min(lim.y.upperBound, max(lim.y.lowerBound, f.y))
+            let cw = min(1, 2 * half.x), ch = min(1, 2 * half.y)
+            let cx = half.x >= 0.5 ? 0.5 : min(1 - half.x, max(half.x, f.x))
+            let cy = half.y >= 0.5 ? 0.5 : min(1 - half.y, max(half.y, f.y))
             let crop = CGRect(x: outer.minX + (cx - cw / 2) * w, y: outer.minY + (cy - ch / 2) * h, width: cw * w, height: ch * h)
             ctx.fill(Path(crop), with: .color(color.opacity(0.3)))
             ctx.stroke(Path(crop), with: .color(color), lineWidth: 1.5)
@@ -294,18 +322,34 @@ struct ScaledSlider: View {
     var enabled: Bool
     var ends: (String, String)
     var ticks: [Double]
+    /// an extra tick drawn long (besides the ends and the middle)
+    var major: Double? = nil
     var readout: String
     var help: String
     var set: (Double) -> Void
     var reset: () -> Void
     var isDefault: Bool
+    /// Typed values: text → a slider value (nil = not understood). Without it the readout can't be typed in.
+    var parse: ((String) -> Double?)? = nil
+    /// Used for typed values instead of `set` (e.g. to skip the slider's snapping).
+    var setExact: ((Double) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
                 Text(title).font(.caption)
                 Spacer()
-                Text(readout).font(.caption.monospacedDigit()).foregroundStyle(enabled ? .primary : .tertiary)
+                if let parse {
+                    ReadoutField(text: readout, enabled: enabled, help: "Click to type a value") { typed in
+                        let t = typed.trimmingCharacters(in: .whitespaces).lowercased()
+                        if SliderParse.resetWords.contains(t) { reset(); return true }
+                        guard let v = parse(t) else { return false }
+                        (setExact ?? set)(min(range.upperBound, max(range.lowerBound, v)))
+                        return true
+                    }
+                } else {
+                    Text(readout).font(.caption.monospacedDigit()).foregroundStyle(enabled ? .primary : .tertiary)
+                }
                 Button { reset() } label: { Image(systemName: "arrow.counterclockwise") }
                     .buttonStyle(.borderless).controlSize(.small)
                     .disabled(isDefault || !enabled)
@@ -319,9 +363,9 @@ struct ScaledSlider: View {
             Canvas { ctx, size in
                 let inset: CGFloat = 7
                 let span = max(1, size.width - inset * 2)
-                for (k, t) in ticks.enumerated() {
+                for t in ticks {
                     let x = inset + CGFloat((t - range.lowerBound) / (range.upperBound - range.lowerBound)) * span
-                    let major = k == 0 || k == ticks.count - 1 || abs(t - (range.lowerBound + range.upperBound) / 2) < 1e-6
+                    let major = t == ticks.min() || t == ticks.max() || (self.major.map { abs(t - $0) < 1e-6 } ?? (abs(t - (range.lowerBound + range.upperBound) / 2) < 1e-6))
                     var p = Path()
                     p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: major ? 5 : 3))
                     ctx.stroke(p, with: .color(.secondary.opacity(enabled ? 0.8 : 0.3)), lineWidth: 1)
@@ -752,5 +796,90 @@ struct SyncRow: View {
         } else {
             Label("reference", systemImage: "scope").foregroundStyle(.secondary).font(.caption)
         }
+    }
+}
+
+
+/// A slider's value readout you can click and type into. Return or clicking away applies it, Esc cancels;
+/// text it can't read beeps and keeps the old value.
+struct ReadoutField: View {
+    var text: String
+    var enabled: Bool
+    var help: String
+    var commit: (String) -> Bool
+    @State private var editing = false
+    @State private var draft = ""
+    @State private var hover = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        if editing {
+            TextField("", text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption.monospacedDigit())
+                .multilineTextAlignment(.trailing)
+                .frame(width: 96)
+                .focused($focused)
+                .onSubmit { finish(apply: true) }
+                .onExitCommand { finish(apply: false) }
+                .onChange(of: focused) { _, f in if !f && editing { finish(apply: true) } }
+                .onAppear { DispatchQueue.main.async { focused = true } }
+        } else {
+            Text(text)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(enabled ? .primary : .tertiary)
+                .padding(.horizontal, 4).padding(.vertical, 1)
+                .background(Color.primary.opacity(enabled ? (hover ? 0.12 : 0.05) : 0), in: RoundedRectangle(cornerRadius: 4))
+                .contentShape(Rectangle())
+                .onHover { hover = $0 }
+                .onTapGesture {
+                    guard enabled else { return }
+                    draft = text
+                    editing = true
+                }
+                .help(enabled ? help : "")
+        }
+    }
+
+    private func finish(apply: Bool) {
+        guard editing else { return }
+        if apply, draft != text, !commit(draft) { NSSound.beep(); return }
+        editing = false
+    }
+}
+
+/// Reading typed slider values: "35 left", "-35", "40% up", "0.6", "1.4x", "fit", "30% down", "reset".
+enum SliderParse {
+    static let resetWords: Set<String> = ["reset", "default", "style", "caption style", "centre", "center", "centred", "centered"]
+
+    static func number(_ s: String) -> Double? {
+        let t = s.replacingOccurrences(of: "\u{2212}", with: "-").replacingOccurrences(of: ",", with: ".")
+        guard let r = t.range(of: #"[-+]?\d*\.?\d+"#, options: .regularExpression) else { return nil }
+        return Double(t[r])
+    }
+
+    /// Left/right or down/up: a percentage of the room it has, towards `low` or `high`.
+    /// Plain numbers: negative = `low`, positive = `high`. Returns the slider position 0…1 (0.5 = centred).
+    static func side(_ low: String, _ high: String) -> (String) -> Double? {
+        { s in
+            guard var n = number(s) else { return nil }
+            if s.contains(low) { n = -abs(n) } else if s.contains(high) { n = abs(n) }
+            return 0.5 + n / 200
+        }
+    }
+
+    /// Zoom: "0.6", "1.4x", "60%", or "fit" / "whole" for the whole picture.
+    static func zoom(fit: Double) -> (String) -> Double? {
+        { s in
+            if s.contains("fit") || s.contains("whole") { return fit }
+            guard let n = number(s), n > 0 else { return nil }
+            return s.contains("%") ? n / 100 : n
+        }
+    }
+
+    /// Caption height: "30" or "30% down" (percent of the frame from the top), or a fraction like 0.3.
+    static func percentDown(_ s: String) -> Double? {
+        guard let n = number(s) else { return nil }
+        return n > 1 ? n / 100 : n
     }
 }
