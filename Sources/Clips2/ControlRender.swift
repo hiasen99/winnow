@@ -69,6 +69,18 @@ extension Control {
         t = max(0, min(t, max(0, length - 0.05)))
         let caps = a.bool("captions") ?? true
         let side = CGFloat(min(2048, max(256, a.num("max_side") ?? 960)))
+        if a.bool("thumbnail") == true {
+            guard let c = clip else { throw ControlError("Thumbnails belong to clips: pass {\"clip\": …, \"thumbnail\": true}.") }
+            let full = try await m.thumbnailImage(c)
+            let k = min(1, side / CGFloat(max(full.width, full.height)))
+            let img = k < 1 ? (Stills.scaled(full, width: Int((CGFloat(full.width) * k).rounded())) ?? full) : full
+            let rep = NSBitmapImageRep(cgImage: img)
+            guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else { throw ControlError("Couldn't encode the thumbnail.") }
+            var info = thumbInfo(m, c)
+            info["clip"] = clipRef(m, c.id); info["imageSize"] = "\(img.width)×\(img.height)"; info["fullSize"] = "\(full.width)×\(full.height)"
+            let text = (try? JSONSerialization.data(withJSONObject: tidy(info), options: [.sortedKeys, .withoutEscapingSlashes])).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            return ["ok": true, "text": text, "image": data.base64EncodedString(), "mime": "image/jpeg"]
+        }
         let img = try await Exporter.frame(project: p, clip: clip, auto: m.auto, loaded: m.sources, at: t, captions: caps, maxSide: side)
         let rep = NSBitmapImageRep(cgImage: img)
         guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
@@ -102,7 +114,7 @@ extension Control {
         if let v = a.d["clips"] {
             if let s = v as? String {
                 switch s.lowercased() {
-                case "used": return m.project.clips.filter { $0.status == .used }
+                case "used", "use": return m.project.clips.filter { $0.status == .used }
                 case "all": return m.project.clips
                 case "unmarked", "to review": return m.project.clips.filter { $0.status == nil }
                 default: return [try findClip(m, s)]
@@ -168,7 +180,7 @@ extension Control {
 
     static let renderCommands: [ControlCommand] = [
         ControlCommand(id: "export.video", label: "Export Video", menu: "Toolbar ▸ Export / Clip ▸ Export Clip…", key: "⌘E",
-                       params: "{clip? | clips?: [numbers/ids/titles] | \"used\" | \"all\"; path?: folder (or a .mp4 file for one clip; default the project's export folder, never overwrites); burnIn?: true/false (default: the clip's setting); srt?: also save captions as .srt (default true); wait?: seconds to wait for it to finish (max 150, default 0 = return at once)}",
+                       params: "{clip? | clips?: [numbers/ids/titles] | \"use\" (every clip marked Use) | \"all\"; path?: folder (or a .mp4 file for one clip; default the project's export folder, never overwrites); burnIn?: true/false (default: the clip's setting); srt?: also save captions as .srt (default true); wait?: seconds to wait for it to finish (max 150, default 0 = return at once)}",
                        enabled: { hasClips($0) },
                        run: { app, a in
             let m = try model(app)

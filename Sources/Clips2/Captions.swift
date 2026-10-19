@@ -160,7 +160,7 @@ enum Captions {
 
     static func font(_ style: CaptionStyle, width: Double) -> NSFont {
         let size = CGFloat(style.fontSize * width)
-        return NSFont(name: style.fontName, size: size) ?? NSFont.systemFont(ofSize: size, weight: .heavy)
+        return FontCatalog.font(style.fontName, size: size, weight: style.fontWeight) ?? NSFont.systemFont(ofSize: size, weight: .heavy)
     }
 
     static func measure(_ s: String, font: NSFont) -> CGFloat {

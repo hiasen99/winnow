@@ -107,10 +107,53 @@ extension Control {
             "lineSpacing": r3(s.lineSpacing), "sideMargin": r3(s.sideMargin), "pauseBreak": r3(s.pauseBreak),
         ]
         d["modeMeans"] = s.mode.label
+        if let fam = FontCatalog.family(of: s.fontName) {
+            d["fontFamily"] = fam
+            let ms = FontCatalog.members(fam)
+            if let m = FontCatalog.member(s.fontName) { d["fontStyle"] = m.style }
+            d["weights"] = ms.map { $0.style }
+        }
+        if let ax = FontCatalog.weightAxis(s.fontName) {
+            d["weightAxis"] = [r3(ax.min), r3(ax.max)]
+            d["weight"] = r3(s.fontWeight ?? FontCatalog.baseWeight(s.fontName) ?? ax.def)
+        }
         return d
     }
 
-    static let styleHelp = "{font? (PostScript or family name), fontSize? (fraction of frame width, 0.075 = default), mode? \"reveal\" (word by word) | \"highlight\" (spoken word coloured) | \"revealHighlight\" | \"line\", uppercase?, textColor?, highlightColor?, outline? (fraction of font size, 0 = none, 0.12 = thick), outlineColor?, shadow?, box? (box behind the lines), boxColor?, wordBox? (box behind the spoken word), wordBoxColor?, wordBoxRound? (0 square–1 pill), maxCharsPerLine?, maxLines?, position? (0 top–1 bottom, centre of the captions), lineSpacing?, sideMargin?, pauseBreak? (seconds of silence that start a new caption)}. Colours are hex \"#RRGGBB\" or \"#RRGGBBAA\". Applies to every clip in the project."
+    static func applyWeight(_ s0: CaptionStyle, _ a: Args) throws -> CaptionStyle {
+        var s = s0
+        guard let raw = a.str("weight")?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return s }
+        let fam = FontCatalog.family(of: s.fontName) ?? s.fontName
+        let members = FontCatalog.members(fam)
+        let axis = FontCatalog.weightAxis(s.fontName)
+        let key = raw.lowercased().replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "-", with: "")
+        if ["reset", "default", "style"].contains(key) { s.fontWeight = nil; return s }
+        // a style name the family has ("Black", "ExtraBold Italic")
+        if let m = members.first(where: { $0.style.lowercased().replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "-", with: "") == key }) {
+            s.fontName = m.postScript; s.fontWeight = nil; return s
+        }
+        guard let css = Double(raw) ?? FontCatalog.cssWords[key] else {
+            throw ControlError("weight \"\(raw)\" isn't a weight of \(fam). It has: " + members.map { $0.style }.joined(separator: ", ")
+                               + (axis != nil ? ", or any number on its weight axis." : ". Or use 100–900 (400 regular, 700 bold, 900 black)."))
+        }
+        if let ax = axis {
+            // variable font: a number on its own axis (most use 100–900; a few like Skia use ~0.5–3)
+            var v = css
+            if ax.max <= 20, css >= 100 { v = ax.min + (ax.max - ax.min) * (min(1000, max(100, css)) - 100) / 800 }
+            s.fontWeight = min(ax.max, max(ax.min, v))
+            return s
+        }
+        guard !members.isEmpty else { throw ControlError("Couldn't list the weights of \(fam).") }
+        let target = FontCatalog.managerWeight(css: css)
+        let italic = FontCatalog.member(s.fontName)?.italic ?? false
+        let pick = members.min { x, y in
+            (abs(x.weight - target) * 2 + (x.italic != italic ? 20 : 0)) < (abs(y.weight - target) * 2 + (y.italic != italic ? 20 : 0))
+        }!
+        s.fontName = pick.postScript; s.fontWeight = nil
+        return s
+    }
+
+    static let styleHelp = "{font? (family name, e.g. \"Noto Sans\", keeps the current weight; or a PostScript name for one exact style), weight? (a style the family has like \"Black\" / \"Bold Italic\", a word thin…regular…bold…black, a number 100–900, or \"reset\"; on a variable font any value on its weight axis), fontSize? (fraction of frame width, 0.075 = default), mode? \"reveal\" (word by word) | \"highlight\" (spoken word coloured) | \"revealHighlight\" | \"line\", uppercase?, textColor?, highlightColor?, outline? (fraction of font size, 0 = none, 0.12 = thick), outlineColor?, shadow?, box? (box behind the lines), boxColor?, wordBox? (box behind the spoken word), wordBoxColor?, wordBoxRound? (0 square–1 pill), maxCharsPerLine?, maxLines?, position? (0 top–1 bottom, centre of the captions), lineSpacing?, sideMargin?, pauseBreak? (seconds of silence that start a new caption)}. Colours are hex \"#RRGGBB\" or \"#RRGGBBAA\". Applies to every clip in the project."
 
     static func applyStyle(_ s0: CaptionStyle, _ a: Args) throws -> CaptionStyle {
         var s = s0
@@ -119,9 +162,16 @@ extension Control {
                 let ok = CaptionStyleSheet.fonts.filter { NSFont(name: $0, size: 12) != nil }
                 throw ControlError("No font \"\(f)\" on this Mac. Some that are: " + ok.joined(separator: ", ") + ".")
             }
-            if NSFont(name: f, size: 12) != nil { s.fontName = f }
-            else if let first = NSFontManager.shared.availableMembers(ofFontFamily: f)?.first?.first as? String { s.fontName = first }
+            let lower = f.lowercased()
+            if let fam = FontCatalog.families.first(where: { $0.lowercased() == lower }),
+               let m = FontCatalog.closestMember(in: fam, to: s0.fontName) {
+                s.fontName = m.postScript            // a family name: keep the current weight as near as it has
+            } else {
+                s.fontName = NSFont(name: f, size: 12) != nil ? f : (NSFontManager.shared.availableMembers(ofFontFamily: f)?.first?.first as? String ?? f)
+            }
+            s.fontWeight = nil
         }
+        if a.has("weight") { s = try applyWeight(s, a) }
         if let v = a.num("fontSize") { s.fontSize = min(0.2, max(0.02, v > 1 ? v / 100 : v)) }
         if let m = a.str("mode") {
             let k = m.lowercased().replacingOccurrences(of: " ", with: "")

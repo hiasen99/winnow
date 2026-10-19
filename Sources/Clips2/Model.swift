@@ -218,6 +218,10 @@ struct Clip: Codable, Identifiable, Hashable {
     var captionBlocks: [CaptionBlock]? = nil
     /// Shots framed on their own, overriding the camera's framing for just that shot. (optional so older projects still load)
     var shotFraming: [ShotFraming]? = nil
+    /// Frames marked with G to save as pictures (master time). (optional so older projects still load)
+    var grabs: [Double]? = nil
+    /// The clip's thumbnail: which frame, and its own title text. nil = the default frame and the clip's title.
+    var thumbnail: ClipThumbnail? = nil
 
     var start: Double { ranges.first?.start ?? 0 }
     var end: Double { ranges.last?.end ?? 0 }
@@ -387,6 +391,29 @@ struct Clip: Codable, Identifiable, Hashable {
     }
 }
 
+/// A clip's thumbnail picture: the frame it uses (master time) and, if it differs from the clip's title, its own text.
+struct ClipThumbnail: Codable, Hashable {
+    var time: Double? = nil
+    var title: String? = nil
+    /// true = `time` is anywhere in the full recording (it can be outside the clip), shown with `angle`'s camera.
+    var fromRecording: Bool? = nil
+    /// The camera for a frame from the recording (nil = automatic, whoever is talking).
+    var angle: Int? = nil
+    /// A picture file used instead of a frame from the video.
+    var imagePath: String? = nil
+
+    var isEmpty: Bool { time == nil && title == nil && fromRecording != true && angle == nil && imagePath == nil }
+    var source: ThumbSource { imagePath != nil ? .file : (fromRecording == true ? .recording : .clip) }
+}
+
+enum ThumbSource: String, CaseIterable, Identifiable {
+    case clip, recording, file
+    var id: String { rawValue }
+    var label: String {
+        switch self { case .clip: return "This clip"; case .recording: return "Whole recording"; case .file: return "Picture file" }
+    }
+}
+
 // MARK: - Captions
 
 enum CaptionMode: String, Codable, CaseIterable, Identifiable {
@@ -407,6 +434,8 @@ enum CaptionMode: String, Codable, CaseIterable, Identifiable {
 
 struct CaptionStyle: Codable, Hashable {
     var fontName: String = "AvenirNext-Heavy"
+    /// Weight on a variable font's weight axis (nil = the font's own weight). Optional so older projects still load.
+    var fontWeight: Double? = nil
     var fontSize: Double = 0.075          // fraction of frame width
     var textColor: RGBA = .white
     var activeColor: RGBA = .yellow
@@ -476,6 +505,10 @@ struct Project: Codable {
     var minShot: Double = 2.0
     var switchLead: Double = 0.25
     var markers: [Marker]? = nil
+    /// Frames marked with G on the full recording (master time). (optional so older projects still load)
+    var grabs: [Double]? = nil
+    /// How clip thumbnails look in this project (title, shade, logo, picture). nil = the default thumbnail style.
+    var thumbnailStyle: ThumbnailStyle? = nil
 
     enum Stage: String, Codable { case new, synced, transcribed }
 

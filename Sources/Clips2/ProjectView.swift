@@ -29,6 +29,8 @@ struct ProjectView: View {
                 ZStack {
                     Color.black
                     PlayerView(engine: model.engine, guides: model.showGuides && model.selectedClip?.format == .vertical, model: model)
+                    // the thumbnail editor shows its preview here, in place of the video
+                    if model.showThumbnail && model.selectedClip != nil { ThumbnailPreview(model: model) }
                     if let b = model.busy { BusyOverlay(text: b, progress: model.progress) }
                 }
                 .frame(minWidth: 420, idealWidth: 640, minHeight: 200, maxHeight: .infinity)
@@ -46,13 +48,18 @@ struct ProjectView: View {
                             }
                         }
                     }
-                    .opacity(showStyle && model.selectedClip != nil ? 0 : 1)
-                    if showStyle && model.selectedClip != nil {
+                    .opacity((showStyle || model.showThumbnail) && model.selectedClip != nil ? 0 : 1)
+                    if model.showThumbnail && model.selectedClip != nil {
+                        ThumbnailSheet(model: model, engine: model.engine)
+                            .background(Color(nsColor: .windowBackgroundColor))
+                    } else if showStyle && model.selectedClip != nil {
                         CaptionStyleSheet(model: model, onDone: { showStyle = false })
                             .background(Color(nsColor: .windowBackgroundColor))
                     }
                 }
                 .frame(minWidth: 300, idealWidth: 400)
+                .onChange(of: showStyle) { _, v in if v { model.showThumbnail = false } }
+                .onChange(of: model.showThumbnail) { _, v in if v { showStyle = false } }
             }
             .frame(maxHeight: .infinity)
             // the timeline runs the full width of the window, under all three columns
@@ -202,7 +209,7 @@ struct ClipsSidebar: View {
     @AppStorage("clipFilter") var filter = "all"
     @State private var renaming: UUID? = nil
 
-    static let filters: [(String, String)] = [("all", "All"), ("unmarked", "To review"), ("used", "Used"), ("rejected", "Rejected")]
+    static let filters: [(String, String)] = [("all", "All"), ("unmarked", "To review"), ("used", "Use"), ("rejected", "Rejected")]
 
     func shown(_ c: Clip) -> Bool { ProjectModel.clipShown(c, filter: filter) }
 
@@ -212,7 +219,7 @@ struct ClipsSidebar: View {
         let left = cs.count - used - rej
         return HStack(spacing: 6) {
             Text("Clips (\(cs.count))")
-            if used > 0 { Text("✓\(used)").foregroundStyle(.green).help("\(used) used") }
+            if used > 0 { Text("✓\(used)").foregroundStyle(.green).help("\(used) marked Use") }
             if rej > 0 { Text("✕\(rej)").foregroundStyle(.red).help("\(rej) rejected") }
             Spacer()
             if left > 0 && left < cs.count { Text("\(left) to review").foregroundStyle(.secondary) }
@@ -224,7 +231,7 @@ struct ClipsSidebar: View {
             ForEach(Self.filters, id: \.0) { Text($0.1).tag($0.0) }
         }
         .pickerStyle(.segmented).labelsHidden().controlSize(.small)
-        .help("Show every clip, only the ones you haven't marked yet, or only used / rejected ones. U / X marks a clip and moves on to the next.")
+        .help("Show every clip, only the ones you haven't marked yet, or only the ones marked Use or Rejected. U / X marks a clip and moves on to the next.")
         .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 2)
     }
 
@@ -242,7 +249,7 @@ struct ClipsSidebar: View {
                             .contextMenu {
                                 Button("Rename…") { renaming = c.id }
                                 Divider()
-                                Button(c.status == .used ? "✓ Used" : "Mark as Used  (U)") { model.toggleStatus(.used, for: c.id) }
+                                Button(c.status == .used ? "✓ Use" : "Mark as Use  (U)") { model.toggleStatus(.used, for: c.id) }
                                 Button(c.status == .rejected ? "✕ Rejected" : "Mark as Rejected  (X)") { model.toggleStatus(.rejected, for: c.id) }
                                 if c.status != nil { Button("Clear Mark") { model.setStatus(nil, for: c.id) } }
                                 if !c.switches.isEmpty {
@@ -253,21 +260,59 @@ struct ClipsSidebar: View {
                                 }
                                 Divider()
                                 Button("Export") { Task { await model.exportAsking(c.id) } }
+                                let nUse = model.project.clips.filter { $0.status == .used }.count
+                                if nUse > 0 {
+                                    Button("Export All \(nUse) Marked Use…") { Task { await model.exportUseClipsAsking() } }
+                                        .disabled(model.batchExport != nil)
+                                }
                                 Button("Duplicate") { model.duplicateClip(c.id) }
                                 Divider()
                                 Button("Delete", role: .destructive) { model.deleteClip(c.id) }
                             }
                     }
                     if filter != "all" && model.project.clips.contains(where: { !shown($0) }) {
-                        Button("Showing \(Self.filters.first { $0.0 == filter }?.1.lowercased() ?? filter) · show all") { filter = "all" }
+                        Button("Showing \(filter == "used" ? "Use" : Self.filters.first { $0.0 == filter }?.1.lowercased() ?? filter) · show all") { filter = "all" }
                             .buttonStyle(.link).font(.caption)
                     }
                 }
             }
             .listStyle(.sidebar)
+            exportUseBar
         }
     }
     let fullID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
+    /// Under the clip list: export every clip marked Use in one go (progress + Stop while it runs).
+    @ViewBuilder var exportUseBar: some View {
+        let n = model.project.clips.filter { $0.status == .used }.count
+        if let b = model.batchExport {
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(b.stopping ? "Stopping after this clip…" : "Exporting \(b.done + 1) of \(b.total)")
+                        .font(.caption.weight(.medium))
+                    Spacer()
+                    Button("Stop") { model.stopBatchExport() }
+                        .controlSize(.small).disabled(b.stopping)
+                        .help("Finish the clip that's exporting now and skip the rest")
+                }
+                let f = b.currentID.flatMap { model.exporting[$0] } ?? 0
+                ProgressView(value: (Double(b.done) + f) / Double(max(1, b.total))).controlSize(.small)
+                Text(b.current).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+        } else if n > 0 {
+            Divider()
+            Button { Task { await model.exportUseClipsAsking() } } label: {
+                Label("Export \(n) Marked Use…", systemImage: "square.and.arrow.up.on.square")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.regular)
+            .disabled(model.busy != nil)
+            .help("Export every clip marked Use (✓) into one folder, each as its own file named after the clip (⇧⌘E)")
+            .padding(.horizontal, 10).padding(.vertical, 8)
+        }
+    }
 }
 
 struct ClipRow: View {
@@ -324,9 +369,9 @@ struct ClipRow: View {
 
     @ViewBuilder var statusIcon: some View {
         switch clip.status {
-        case .used: Image(systemName: "checkmark.circle.fill").foregroundStyle(Brand.gold).help("Used")
+        case .used: Image(systemName: "checkmark.circle.fill").foregroundStyle(Brand.gold).help("Use")
         case .rejected: Image(systemName: "xmark.circle.fill").foregroundStyle(.red).help("Rejected")
-        case nil: Image(systemName: "circle").foregroundStyle(.tertiary).help("Not marked yet. U = used, X = rejected")
+        case nil: Image(systemName: "circle").foregroundStyle(.tertiary).help("Not marked yet. U = use, X = rejected")
         }
     }
 }
@@ -647,6 +692,8 @@ func handleKey(_ model: ProjectModel, _ e: NSEvent) -> Bool {
         if model.selection != nil { model.beginEditingText(); return true }; return false
     case "h": if model.selection != nil { model.toggleHiddenSelection(); return true }; return false
     case "b": model.bladeAtPlayhead(); return true
+    case "g": model.toggleGrab(); return true
+    case "t": if model.selectedClip != nil { model.useFrameAsThumbnail(); return true }; return false
     case "m": model.addMarker(); return true
     case "n": model.snapping.toggle(); return true
     case "s": model.skimming.toggle(); return true

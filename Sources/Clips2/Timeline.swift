@@ -155,6 +155,17 @@ struct TimelinePanel: View {
         return model.markersOnTimeline().first { abs(L.x($0.1) - p.x) <= 5 }?.0
     }
 
+    /// A grabbed frame's camera (or the thumbnail's picture) on the ruler.
+    func grab(at p: CGPoint, _ L: TLLayout) -> (master: Double, out: Double)? {
+        guard L.zone(p.y) == .ruler, p.y >= TLLayout.rulerH - 13 else { return nil }
+        return model.grabsInView.min { abs(L.x($0.out) - p.x) < abs(L.x($1.out) - p.x) }.flatMap { abs(L.x($0.out) - p.x) <= 6 ? $0 : nil }
+    }
+    func thumbMark(at p: CGPoint, _ L: TLLayout) -> Double? {
+        guard L.zone(p.y) == .ruler, p.y >= TLLayout.rulerH - 13, let c = model.selectedClip, c.thumbnail?.time != nil, c.thumbnail?.source == .clip else { return nil }
+        let o = model.thumbnailOutTime(c)
+        return abs(L.x(o) - p.x) <= 6 ? o : nil
+    }
+
     func clip(at p: CGPoint, _ L: TLLayout) -> Clip? {
         guard L.hasClipsLane, L.zone(p.y) == .clips else { return nil }
         let t = L.t(p.x)
@@ -195,7 +206,7 @@ struct TimelinePanel: View {
         if dragMode == .capDrag, let d = model.captionDrag { return d.mode == .move ? .closedHand : .resizeLeftRight }
         if let c = caption(at: p, L) { return c.mode == .move ? .openHand : .resizeLeftRight }
         switch L.zone(p.y) {
-        case .ruler: return marker(at: p, L) != nil ? .pointingHand : .resizeLeftRight
+        case .ruler: return marker(at: p, L) != nil || grab(at: p, L) != nil || thumbMark(at: p, L) != nil ? .pointingHand : .resizeLeftRight
         case .clips: return clip(at: p, L) != nil ? .pointingHand : .arrow
         case .scroller: return .openHand
         default: return .arrow
@@ -224,6 +235,8 @@ struct TimelinePanel: View {
             if e.clickCount == 2 { model.askRenameMarker(mk) } else if let o = model.outputTime(mk.time) { engine.seek(o) }
             return
         }
+        if zone == .ruler, let g = grab(at: p, L) { engine.pause(); engine.seek(g.out); return }
+        if zone == .ruler, let o = thumbMark(at: p, L) { engine.pause(); engine.seek(o); return }
         if zone == .ruler { dragMode = .scrub; engine.scrub(t); return }
         if zone == .clips {
             if let c = clip(at: p, L) {
@@ -360,12 +373,22 @@ struct TimelinePanel: View {
             m.add("Delete Marker") { model.deleteMarker(mk.id) }
             return m
         }
+        if let g = grab(at: p, L) {
+            m.add("Save This Frame…") { engine.pause(); engine.seek(g.out); Task { await model.saveFrameAsking() } }
+            if model.selectedClip != nil {
+                m.add("Use as the Thumbnail") { engine.pause(); engine.seek(g.out); model.useFrameAsThumbnail() }
+            }
+            m.add("Un-grab This Frame") { model.removeGrab(master: g.master) }
+            m.addSeparator()
+            m.add("Save All \(model.grabsInView.count) Grabbed Frames…") { Task { await model.saveGrabsAsking() } }
+            return m
+        }
         switch L.zone(p.y) {
         case .clips:
             if let c = clip(at: p, L) {
                 m.add("Open “\(c.title)”") { model.select(clip: c.id) }
                 m.addSeparator()
-                m.add("Used", checked: c.status == .used) { model.toggleStatus(.used, for: c.id) }
+                m.add("Use", checked: c.status == .used) { model.toggleStatus(.used, for: c.id) }
                 m.add("Rejected", checked: c.status == .rejected) { model.toggleStatus(.rejected, for: c.id) }
                 return m
             }
@@ -440,6 +463,12 @@ struct TimelinePanel: View {
             else { m.add("Make Clip from Selection") { model.timelineSelectionToClip() } }
         }
         m.add("Add Marker at Playhead") { model.addMarker() }
+        m.add(model.playheadIsGrabbed ? "Un-grab Frame at Playhead (G)" : "Grab Frame at Playhead (G)") { model.toggleGrab() }
+        m.add("Save Frame at Playhead…") { Task { await model.saveFrameAsking() } }
+        if model.selectedClip != nil {
+            m.add("Use Frame at Playhead as Thumbnail (T)") { model.useFrameAsThumbnail() }
+        }
+        m.addSeparator()
         m.add("Zoom to Fit") { model.fitTimeline() }
         return m
     }
@@ -714,6 +743,23 @@ struct TimelinePanel: View {
             }
         }
 
+        // grabbed frames (G): a gold camera on the ruler; the clip's thumbnail frame: a green picture
+        let grabIcon = { () -> GraphicsContext.ResolvedImage in var r = ctx.resolve(Image(systemName: "camera.fill")); r.shading = .color(Brand.gold); return r }()
+        for g in model.grabsInView where g.out >= L.start - L.spp * 10 && g.out <= end {
+            let px = L.x(g.out)
+            ctx.draw(grabIcon, in: CGRect(x: px - 6, y: TLLayout.rulerH - 11, width: 12, height: 9))
+            ctx.fill(Path(CGRect(x: px - 0.5, y: L.videoY, width: 1, height: L.videoH)), with: .color(Brand.gold.opacity(0.85)))
+        }
+        if let c = clip, c.thumbnail?.time != nil, c.thumbnail?.source == .clip {
+            let o = model.thumbnailOutTime(c)
+            if o >= L.start - L.spp * 10 && o <= end {
+                let px = L.x(o)
+                var r = ctx.resolve(Image(systemName: "photo.fill")); r.shading = .color(Brand.green)
+                ctx.draw(r, in: CGRect(x: px - 6, y: TLLayout.rulerH - 11, width: 12, height: 9))
+                ctx.fill(Path(CGRect(x: px - 0.5, y: L.videoY, width: 1, height: L.videoH)), with: .color(Brand.green.opacity(0.85)))
+            }
+        }
+
         // range selection
         if !model.tlSegmentSelected, let sel = model.tlSel, sel.upperBound > L.start, sel.lowerBound < end {
             let xa = L.x(max(sel.lowerBound, L.start)), xb = L.x(min(sel.upperBound, end))
@@ -833,6 +879,13 @@ struct TimelineToolbar: View {
                 .disabled(model.selectedClip == nil)
             Button { model.addMarker() } label: { Image(systemName: "bookmark") }
                 .help("Add a marker at the playhead (M). Double-click a marker to name it; right-click to delete.")
+            Button { model.toggleGrab() } label: {
+                Image(systemName: model.playheadIsGrabbed ? "camera.fill" : "camera").foregroundStyle(model.playheadIsGrabbed ? Brand.gold : Color.primary)
+            }
+            .help(model.playheadIsGrabbed ? "This frame is grabbed. Click to un-grab it (G)."
+                  : "Grab this frame (G): mark it to save as a picture. Save them all from under the clip settings.")
+            Button { Task { await model.saveFrameAsking() } } label: { Image(systemName: "square.and.arrow.down.on.square") }
+                .help("Save this frame as a picture now… (⇧⌘S)")
             Button { model.setRangeIn() } label: { Text("I").font(.callout.weight(.bold).monospaced()) }
                 .help("Range starts at the playhead (I)")
             Button { model.setRangeOut() } label: { Text("O").font(.callout.weight(.bold).monospaced()) }

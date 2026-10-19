@@ -234,8 +234,8 @@ extension Control {
             m.renameClip(c.id, to: t)
             return clipRef(m, c.id)
         }),
-        ControlCommand(id: "clip.mark", label: "Mark Clip Used / Rejected", menu: "Clip ▸ Mark as Used / Rejected", key: "U / X", changesProject: true,
-                       params: "{clip?, mark: \"used\" | \"rejected\" | \"none\"}",
+        ControlCommand(id: "clip.mark", label: "Mark Clip Use / Rejected", menu: "Clip ▸ Mark as Use / Rejected", key: "U / X", changesProject: true,
+                       params: "{clip?, mark: \"use\" | \"rejected\" | \"none\"} (shown as Use in the app; project_inspect reports it as \"used\")",
                        enabled: { hasClips($0) },
                        run: { app, a in
             let m = try model(app)

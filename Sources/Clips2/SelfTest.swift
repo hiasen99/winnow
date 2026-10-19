@@ -3,6 +3,8 @@ import ImageIO
 import CoreGraphics
 import AVFoundation
 import QuartzCore
+import AppKit
+import CoreText
 
 /// Headless end-to-end check:  Clips2 --selftest <outdir> <cameraA> <cameraB>
 @MainActor
@@ -431,6 +433,118 @@ enum SelfTest {
                              ("60%", sz("60%")), ("fit", sz("fit")), ("30% down", SliderParse.percentDown("30% down")), ("0.3", SliderParse.percentDown("0.3")),
                              ("abc", sz("abc"))]
                 .map { "\($0.0)→\($0.1.map { String(format: "%.3f", $0) } ?? "nil")" }.joined(separator: " "))
+            // caption font weights: family menu, closest weight, variable-font weight axis, MCP font/weight
+            do {
+                let avenir = FontCatalog.members("Avenir Next").filter { !$0.italic }.map { $0.style }
+                let near = FontCatalog.closestMember(in: "Avenir Next", to: "Futura-Bold")?.postScript ?? "nil"
+                var st = CaptionStyle(); st.fontName = "Skia-Regular"
+                let ax = FontCatalog.weightAxis(st.fontName)
+                let w0 = Captions.measure("WINNOW CAPTIONS", font: Captions.font(st, width: 1080))
+                st.fontWeight = ax?.max
+                let f1 = Captions.font(st, width: 1080)
+                let w1 = Captions.measure("WINNOW CAPTIONS", font: f1)
+                let applied = (CTFontCopyVariation(f1 as CTFont) as? [NSNumber: NSNumber])?[NSNumber(value: FontCatalog.wghtTag)]?.doubleValue
+                log("font weights: Avenir Next \(avenir); closest to Futura-Bold \(near); Skia axis \(ax.map { "\($0.min)-\($0.max)" } ?? "none"), "
+                    + String(format: "width %.0f → %.0f at heaviest (applied %@)", w0, w1, applied.map { String(format: "%.2f", $0) } ?? "nil"))
+                let a1 = try Control.applyStyle(CaptionStyle(), Args(["font": "Helvetica Neue", "weight": "bold"]))
+                let a2 = try Control.applyStyle(CaptionStyle(), Args(["font": "Avenir Next", "weight": 900] as [String: Any]))
+                let a3 = try Control.applyStyle(CaptionStyle(), Args(["font": "Skia", "weight": "black"]))
+                let a4 = try Control.applyStyle(a2, Args(["font": "Helvetica Neue"]))
+                log("mcp weight: Helvetica Neue bold→\(a1.fontName)  Avenir Next 900→\(a2.fontName)  Skia black→\(a3.fontName) \(a3.fontWeight.map { String(format: "%.2f", $0) } ?? "-")  heavy→Helvetica Neue keeps weight→\(a4.fontName)")
+                for fam in ["Noto Sans"] {
+                    let ms = FontCatalog.members(fam)
+                    let axn = FontCatalog.weightAxis(ms.first?.postScript ?? fam)
+                    log("installed \(fam): \(ms.map { "\($0.style)=\($0.postScript) w\($0.weight)" }.joined(separator: ", ")); axis \(axn.map { "\($0.min)-\($0.max)" } ?? "none")")
+                }
+            } catch { log("font weight test failed: \(error)") }
+            // Export Marked Use: duplicate the clip twice (same title), mark two Use, export as .srt then one as video
+            do {
+                let first = m.project.clips[0].id
+                m.duplicateClip(first); m.duplicateClip(first)
+                let ids = m.project.clips.map { $0.id }
+                m.setStatus(.used, for: ids[0]); m.setStatus(.used, for: ids[1])
+                m.renameClip(ids[1], to: m.project.clips[0].title)
+                let use = m.useClips
+                let bdir = outDir.appendingPathComponent("batch", isDirectory: true)
+                try? FileManager.default.removeItem(at: bdir)
+                try FileManager.default.createDirectory(at: bdir, withIntermediateDirectories: true)
+                let jobs = ProjectModel.batchFiles(use, folder: bdir, ext: "srt")
+                await m.runBatchExport(jobs, kind: .captions, alsoSRT: false, burnIn: nil, folder: bdir)
+                let again = ProjectModel.batchFiles(use, folder: bdir, ext: "srt", avoidExisting: true)
+                let vjobs = ProjectModel.batchFiles(Array(use.prefix(1)), folder: bdir, ext: "mp4")
+                await m.runBatchExport(vjobs, kind: .video, alsoSRT: true, burnIn: false, folder: bdir)
+                let files = ((try? FileManager.default.contentsOfDirectory(atPath: bdir.path)) ?? []).sorted()
+                log("batch export: \(use.count) marked Use → \(jobs.map { $0.url.lastPathComponent }); keep-both names \(again.map { $0.url.lastPathComponent }); folder \(files); notice \(m.notice ?? "-"); burn-in unchanged \(m.project.clips[0].captions)")
+            }
+            // frames: grab (G), save one, save the grabs; thumbnails: frame, title, look, logo, saved beside an export
+            do {
+                func dims(_ u: URL) -> String {
+                    guard let src = CGImageSourceCreateWithURL(u as CFURL, nil), let im = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return "unreadable" }
+                    return "\(im.width)x\(im.height)"
+                }
+                let sdir = outDir.appendingPathComponent("stills", isDirectory: true)
+                try? FileManager.default.removeItem(at: sdir)
+                try FileManager.default.createDirectory(at: sdir, withIntermediateDirectories: true)
+                let cid = m.project.clips[0].id
+                m.select(clip: cid)
+                m.engine.seek(0.5); m.toggleGrab()
+                m.engine.seek(1.5); m.toggleGrab()
+                m.engine.seek(1.505); let was = m.playheadIsGrabbed; m.toggleGrab()      // same frame: un-grabs
+                m.engine.seek(2.0); m.toggleGrab()
+                let g = m.grabsInView.map { String(format: "%.2f", $0.out) }
+                let c = m.project.clips.first { $0.id == cid }!
+                let files = await m.saveGrabs(clip: c, outs: m.grabsInView.map { $0.out }, to: sdir.appendingPathComponent("Frame Grabs"), format: .png, captions: true)
+                let one = sdir.appendingPathComponent("one.jpg")
+                let ok1 = await m.saveFrame(clip: c, at: 1.0, to: one, format: .small, captions: false)
+                m.select(clip: nil)
+                m.engine.seek(3.0); m.toggleGrab()
+                let full = sdir.appendingPathComponent("full.png")
+                let ok2 = await m.saveFrame(clip: nil, at: 3.0, to: full, format: .png, captions: false)
+                log("grabs: in clip \(g) (re-press un-grabbed: \(was)); full recording \(m.grabsInView.count); saved \(files.map { $0.lastPathComponent + " " + dims($0) }); "
+                    + "one small \(ok1) \(dims(one)); full-recording camera frame \(ok2) \(dims(full)) (camera \(Int(m.project.angles[0].width))x\(Int(m.project.angles[0].height)))")
+                // a logo: a gold circle on a see-through background
+                let logoURL = sdir.appendingPathComponent("logo.png")
+                if let ctx = CGContext(data: nil, width: 300, height: 150, bitsPerComponent: 8, bytesPerRow: 0, space: Stills.sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                    ctx.setFillColor(CGColor(srgbRed: 0.79, green: 0.6, blue: 0.18, alpha: 1)); ctx.fillEllipse(in: CGRect(x: 10, y: 10, width: 130, height: 130))
+                    ctx.setFillColor(CGColor(srgbRed: 0.24, green: 0.55, blue: 0.25, alpha: 1)); ctx.fill(CGRect(x: 160, y: 40, width: 130, height: 70))
+                    if let im = ctx.makeImage() { try Stills.write(im, to: logoURL, format: .png) }
+                }
+                m.select(clip: cid)
+                let d0 = m.thumbnailStyle, cap = m.project.captionStyle
+                log("thumbnail default follows captions \(m.thumbnailStyleIsCaptions): font \(d0.fontName)=\(cap.fontName) size \(d0.textSize)=\(cap.fontSize) height \(d0.titleY)=\(cap.positionY) caps \(d0.uppercase)=\(cap.uppercase) outline \(d0.outline)")
+                m.engine.seek(1.2); m.useFrameAsThumbnail()
+                m.setThumbnailTitle(cid, "Why the gospel changes everything")
+                var st = try Control.applyThumbStyle(m.thumbnailStyle, Args(["logo": logoURL.path, "logoCorner": "topLeft", "contrast": 1.2, "font": "Avenir Next", "weight": "heavy"] as [String: Any]))
+                m.setThumbnailStyle(st)
+                let tc = m.project.clips.first { $0.id == cid }!
+                let tv = sdir.appendingPathComponent("thumb-vertical.jpg")
+                _ = await m.saveThumbnail(tc, to: tv, quiet: true)
+                var wide = tc; wide.format = .horizontal
+                let tw = sdir.appendingPathComponent("thumb-wide.jpg")
+                _ = await m.saveThumbnail(wide, to: tw, quiet: true)
+                st = try Control.applyThumbStyle(st, Args(["preset": "big outlined", "align": "left"]))
+                m.setThumbnailStyle(st)
+                let tb = sdir.appendingPathComponent("thumb-big.png")
+                _ = await m.saveThumbnail(tc, to: tb, quiet: true)
+                // a frame from outside the clip (camera B), then a picture file
+                let outsideAt = min(m.project.masterDuration - 0.5, tc.end + 1.5)
+                m.setThumbnailRecordingTime(cid, master: outsideAt)
+                m.setThumbnailAngle(cid, m.project.videoIndices.last)
+                let to = sdir.appendingPathComponent("thumb-outside.jpg")
+                let okOut = await m.saveThumbnail(m.project.clips.first { $0.id == cid }!, to: to, quiet: true)
+                let srcOut = m.project.clips.first { $0.id == cid }!.thumbnail?.source.rawValue ?? "-"
+                m.setThumbnailImage(cid, full.path)
+                let tf = sdir.appendingPathComponent("thumb-file.jpg")
+                let okFile = await m.saveThumbnail(m.project.clips.first { $0.id == cid }!, to: tf, quiet: true)
+                log(String(format: "thumbnail sources: recording %.2f (clip ends %.2f) %@ %@ %@; file %@ %@", outsideAt, tc.end, srcOut, okOut ? "ok" : "FAILED", dims(to),
+                           okFile ? "ok" : "FAILED", dims(tf)))
+                m.setThumbnailImage(cid, nil)
+                m.saveNow()
+                let reloaded = try Store.load(m.folder)
+                let besides = ((try? FileManager.default.contentsOfDirectory(atPath: outDir.appendingPathComponent("batch").path)) ?? []).filter { $0.contains("thumbnail") }
+                log("thumbnail: frame \(String(format: "%.2f", m.thumbnailOutTime(tc))) title \"\(m.thumbnailTitle(tc))\"; vertical \(dims(tv)) wide \(dims(tw)) big \(dims(tb)); logo kept by preset \(st.logoPath != nil) font \(st.fontName); "
+                    + "saved in project \(reloaded.clips.first { $0.id == cid }?.thumbnail?.title != nil) style \(reloaded.thumbnailStyle?.logoPath != nil); beside batch export \(besides)")
+            } catch { log("stills test failed: \(error)") }
             Store.delete(folder)
             log("SELFTEST OK")
             return 0

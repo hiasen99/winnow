@@ -5,7 +5,7 @@ import Foundation
 /// (ControlClient starts Clips 2 in the background if it isn't open).
 enum MCPServer {
 
-    static let version = "0.4"
+    static let version = "0.5"
 
     static var instructions: String {
         """
@@ -24,12 +24,16 @@ enum MCPServer {
         Edits work on any clip ("clip": number, id or title; default the one showing) without changing what's on screen.
         To find clips: read transcript_read, pick complete standalone moments (strong opening line, one idea, clean ending),         then add them all at once with command_run clip.createMany. Check a clip's captions with clip_inspect; \
         fix them with caption.setText / caption.setTexts (by caption number), caption.split / join / retime, \
-        and a misheard name everywhere with text.replace. caption.style changes the look for the whole project.
+        and a misheard name everywhere with text.replace. caption.style changes the look for the whole project (font family, weight — any installed style, or any thickness on a variable font — colours, animation, layout).
         camera.set and sound.set take from/to (recording seconds) to change exactly one stretch. clip_inspect lists the clip's shots \
         (one camera between cuts); framing.set with shot: <seconds inside it> frames that one shot on its own (when someone moves). \
         framing.set zoom below 1 (or zoom: "fit") zooms out: the picture gets smaller than the frame with a blurred copy of the camera behind it.
         render_frame shows a frame exactly as it will export, so check your changes with it. \
-        export.video / export.audio / export.srt export clips (also "used" for every clip marked used) in the background; export.status follows them.
+        Pictures: frame.save saves one frame as a PNG/JPEG (a clip's frame as it exports, or the full recording's camera frame); \
+        frame.grab marks frames (like pressing G) and frame.saveGrabs saves them all. Each clip has a thumbnail: thumbnail.set picks its frame and title, \
+        thumbnail.style sets the project's look (title font/size/position, dark fade, logo, brightness/contrast/saturation), \
+        render_frame {thumbnail: true} shows it, thumbnail.save writes it; exporting a video also saves "<name> thumbnail.jpg" beside it unless withExport is off.
+        export.video / export.audio / export.srt export clips (also "use" for every clip marked Use — the Export Marked Use button in the clip list) in the background; export.status follows them.
         """
     }
 
@@ -55,6 +59,7 @@ enum MCPServer {
                   "seconds": ["type": "number", "description": "Seconds into the clip (default: the playhead if that clip is showing, else 0)."],
                   "recording": ["type": "boolean", "description": "true = seconds are recording time instead."],
                   "captions": ["type": "boolean", "description": "Draw the captions (default true)."],
+                  "thumbnail": ["type": "boolean", "description": "true = the clip's thumbnail (its thumbnail frame with title, shade and logo) instead of a frame."],
                   "max_side": ["type": "integer", "description": "Longest side in pixels (default 960)."]]),
             tool("command_list", "Every command (id, label, where it is in the app, shortcut, parameters, whether it changes the project, whether it can run right now).",
                  ["filter": ["type": "string", "description": "Only commands whose id or label contains this text."],

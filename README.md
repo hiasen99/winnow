@@ -24,10 +24,16 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
   1× (or press *Fit* to show a wide camera whole in a vertical clip) and a blurred copy of
   the picture fills the frame behind it. Click any slider's value to type an exact number.
 - **Captions that are easy to fix.** Captions are blocks on the timeline: drag to move,
-  drag edges to re-time, double-click to fix the text. Style presets for the look.
-- **Review fast.** Mark clips Used (U) or Rejected (X) and jump to the next.
-- **Export** vertical, square or wide video with burned-in captions, audio only, or
-  an .srt file.
+  drag edges to re-time, double-click to fix the text. Style presets for the look, with
+  any installed font and any weight (or any thickness on a variable font).
+- **Review fast.** Mark clips Use (U) or Rejected (X) and jump to the next, then export
+  every clip marked Use into one folder in one go.
+- **Frames and thumbnails.** Save any frame as a PNG or JPEG (⇧⌘S), or grab frames with G
+  and save them all at once. Each clip gets a thumbnail: pick its frame from the clip,
+  anywhere in the recording, or a picture file, then add its title (starting from your
+  caption style), a dark fade, your logo, and brightness / contrast / saturation.
+- **Export** vertical, square or wide video with burned-in captions (and a thumbnail
+  beside it), audio only, or an .srt file.
 
 ## Download
 

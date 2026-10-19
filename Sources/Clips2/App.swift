@@ -216,10 +216,18 @@ struct Clips2App: App {
                 Button("Next Edit Point") { app.active?.jumpEditPoint(next: true) }
                 Button("Previous Edit Point") { app.active?.jumpEditPoint(next: false) }
                 Divider()
+                Button("Save Frame…") { if let m = app.active { Task { await m.saveFrameAsking() } } }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                Button("Grab Frame / Un-grab  (G)") { app.active?.toggleGrab() }
+                Button("Save Grabbed Frames…") { if let m = app.active { Task { await m.saveGrabsAsking() } } }
+                Button("Use Frame as Thumbnail  (T)") { app.active?.useFrameAsThumbnail() }
+                Button("Edit Thumbnail…") { if let m = app.active, m.selectedClip != nil { m.showThumbnail = true } }
+                Button("Save Thumbnail…") { if let m = app.active, let id = m.selectedClipID { Task { await m.saveThumbnailAsking(id) } } }
+                Divider()
                 Button("Fix Transcript Text…") { app.active?.beginEditingText() }
                 Button("Re-time Words to the Sound") { if let m = app.active { Task { await m.retimeWords() } } }
                 Divider()
-                Button("Mark as Used, Go to Next  (U)") { app.active?.markAndAdvance(.used) }
+                Button("Mark as Use, Go to Next  (U)") { app.active?.markAndAdvance(.used) }
                 Button("Mark as Rejected, Go to Next  (X)") { app.active?.markAndAdvance(.rejected) }
                 Button("Clear Clip Mark") { app.active?.setStatus(nil) }
                 Button("Previous Clip") { app.active?.selectAdjacentClip(next: false) }.keyboardShortcut(.upArrow, modifiers: .command)
@@ -228,6 +236,9 @@ struct Clips2App: App {
                 Button("Export Clip…") {
                     if let m = app.active, let id = m.selectedClipID { Task { await m.exportAsking(id) } }
                 }.keyboardShortcut("e", modifiers: .command)
+                Button("Export All Marked Use…") {
+                    if let m = app.active { Task { await m.exportUseClipsAsking() } }
+                }.keyboardShortcut("e", modifiers: [.command, .shift])
             }
         }
         // Claude's own project, opened with app.show (or Window ▸ Claude's Project) while Claude works on a different project from yours

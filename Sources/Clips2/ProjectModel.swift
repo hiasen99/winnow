@@ -72,6 +72,8 @@ final class ProjectModel: ObservableObject {
     @Published var frameScope: FrameScope = .camera
     /// The "Adjust framing" pop-over (also opened from the timeline's right-click menu).
     @Published var showFraming = false
+    /// The thumbnail editor (in place of the captions panel).
+    @Published var showThumbnail = false
     /// How many windows show this project. With none (Claude working on it in the background) it stays silent.
     var viewers = 0 { didSet { engine.player.isMuted = viewers <= 0 } }
 
@@ -1245,8 +1247,12 @@ final class ProjectModel: ObservableObject {
         await export(id, to: url, kind: ep.kind, alsoSRT: ep.alsoSRT)
     }
 
-    func export(_ id: UUID, to url: URL, kind: ExportKind = .video, alsoSRT: Bool = true) async {
-        guard let clip = project.clips.first(where: { $0.id == id }) else { return }
+    /// `burnIn` overrides the clip's own caption setting for this export only; `quiet` skips the "Saved…" notice (batch exports).
+    @discardableResult
+    func export(_ id: UUID, to url: URL, kind: ExportKind = .video, alsoSRT: Bool = true,
+                burnIn: Bool? = nil, quiet: Bool = false) async -> Bool {
+        guard var clip = project.clips.first(where: { $0.id == id }) else { return false }
+        if let b = burnIn { clip.captions = b }
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let srt = Captions.srt(Captions.track(for: clip, project: project))
@@ -1260,17 +1266,20 @@ final class ProjectModel: ObservableObject {
             case .video:
                 try await Exporter.export(project: project, clip: clip, auto: auto, loaded: sources, to: url, progress: progress)
                 if alsoSRT { try? srt.write(to: url.deletingPathExtension().appendingPathExtension("srt"), atomically: true, encoding: .utf8) }
+                await writeThumbnail(clip, beside: url)
             case .audioM4A, .audioWAV:
                 try await Exporter.exportAudio(project: project, clip: clip, auto: auto, loaded: sources, to: url,
                                                wav: kind == .audioWAV, progress: progress)
             case .captions:
                 try srt.write(to: url, atomically: true, encoding: .utf8)
             }
-            notice = "Saved “\(url.lastPathComponent)” in \(dir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))"
+            if !quiet { notice = "Saved “\(url.lastPathComponent)” in \(dir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))" }
             lastExport = url
+            return true
         } catch {
-            errorText = "Export failed: \(error.localizedDescription)"
+            if !quiet { errorText = "Export failed: \(error.localizedDescription)" }
             Log.write("export failed: \(error)")
+            return false
         }
     }
 
@@ -1280,9 +1289,15 @@ final class ProjectModel: ObservableObject {
         await export(id, to: exportFolder.appendingPathComponent(Exporter.safeName(clip.title) + ".mp4"))
     }
     @Published var lastExport: URL? = nil
+    /// Files from the last "Export Marked Use" (Show selects them all in Finder).
+    var lastExportBatch: [URL] = []
+    /// Progress of "Export Marked Use" while it runs.
+    @Published var batchExport: BatchExportState? = nil
 
     func revealLastExport() {
-        if let u = lastExport { NSWorkspace.shared.activateFileViewerSelecting([u]) }
+        if lastExportBatch.count > 1, lastExportBatch.contains(where: { $0 == lastExport }) {
+            NSWorkspace.shared.activateFileViewerSelecting(lastExportBatch.filter { FileManager.default.fileExists(atPath: $0.path) })
+        } else if let u = lastExport { NSWorkspace.shared.activateFileViewerSelecting([u]) }
         else { NSWorkspace.shared.open(Store.exportDir) }
     }
 }

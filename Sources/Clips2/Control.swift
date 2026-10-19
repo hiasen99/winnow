@@ -227,6 +227,8 @@ enum Control {
             "sources": sources,
             "speakers": p.speakers.map { ["name": $0.name, "camera": angleName($0.angle, p)] },
             "markers": (p.markers ?? []).map { mk -> [String: Any] in ["time": r3(mk.time), "name": mk.name] },
+            "grabbedFrames": grabList(m, nil),
+            "thumbnailStyle": thumbStyleSummary(m.thumbnailStyle),
             "autoCamera": ["minShot": r3(p.minShot), "switchLead": r3(p.switchLead)],
             "captionStyle": styleSummary(p.captionStyle),
         ] as [String: Any]
@@ -246,6 +248,8 @@ enum Control {
             ["time": r3(s.time), "out": r3(c.outputTimeClamped(forMaster: s.time)), "camera": s.angle.map { angleName($0, p) } ?? "auto"]
         }
         d["sound"] = heard(c.audio.on, p)
+        d["thumbnail"] = thumbInfo(m, c)
+        d["grabbedFrames"] = grabList(m, c)
         d["soundChanges"] = c.soundChanges.map { s -> [String: Any] in
             ["time": r3(s.time), "hear": s.on.map { heard($0, p) as Any } ?? "the clip's own sound"]
         }
@@ -354,7 +358,7 @@ enum Control {
     static func hasProject(_ app: AppState) -> Bool { app.claude != nil }
     static func hasClips(_ app: AppState) -> Bool { !(app.claude?.project.clips.isEmpty ?? true) }
 
-    static let commands: [ControlCommand] = baseCommands + editCommands + captionCommands + renderCommands
+    static let commands: [ControlCommand] = baseCommands + editCommands + captionCommands + renderCommands + stillCommands
 
     static let baseCommands: [ControlCommand] = [
         ControlCommand(id: "app.show", label: "Show Winnow Window", menu: "Open Winnow (Dock, Finder, Spotlight)",

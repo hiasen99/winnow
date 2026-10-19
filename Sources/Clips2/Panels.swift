@@ -30,6 +30,9 @@ struct ClipInspector: View {
                     }
                 }
                 ShotScopeRow(model: model, engine: model.engine)
+                Divider()
+                ThumbnailRow(model: model, engine: model.engine, clip: clip)
+                GrabsRow(model: model)
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -40,6 +43,7 @@ struct ClipInspector: View {
                 } else if model.busy == nil {
                     Button("Analyse again") { Task { await model.analyze() } }
                 }
+                GrabsRow(model: model)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -467,14 +471,7 @@ struct CaptionStyleSheet: View {
             Divider()
             Form {
                 Section("Text") {
-                    Picker("Font", selection: Binding(get: { s.fontName }, set: { v in set { $0.fontName = v } })) {
-                        ForEach(Self.fonts.filter { NSFont(name: $0, size: 12) != nil } + (Self.fonts.contains(s.fontName) ? [] : [s.fontName]), id: \.self) {
-                            Text($0).font(.custom($0, size: 13)).tag($0)
-                        }
-                    }
-                    TextField("…or any installed font's PostScript name", text: Binding(get: { s.fontName }, set: { v in
-                        if NSFont(name: v, size: 12) != nil { set { $0.fontName = v } }
-                    }))
+                    CaptionFontControls(style: s) { change in set(change) }
                     slider("Size", s.fontSize, 0.035...0.13) { v in set { $0.fontSize = v } }
                     Toggle("ALL CAPS", isOn: Binding(get: { s.uppercase }, set: { v in set { $0.uppercase = v } }))
                     ColorPicker("Text colour", selection: Binding(get: { s.textColor.color }, set: { v in set { $0.textColor = RGBA(v) } }))
@@ -592,7 +589,7 @@ struct FindClipsSheet: View {
                     }
                     .buttonStyle(.borderedProminent).tint(Brand.green).controlSize(.large)
                     .keyboardShortcut(.defaultAction)
-                    Text("Sends only the transcript text. The clips land in your list, ready to review (U = used, X = rejected).")
+                    Text("Sends only the transcript text. The clips land in your list, ready to review (U = use, X = rejected).")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             } else {
@@ -881,5 +878,72 @@ enum SliderParse {
     static func percentDown(_ s: String) -> Double? {
         guard let n = number(s) else { return nil }
         return n > 1 ? n / 100 : n
+    }
+}
+
+// MARK: - Caption font: family, weight, and the weight axis of variable fonts
+
+struct CaptionFontControls: View {
+    let style: CaptionStyle
+    let set: ((inout CaptionStyle) -> Void) -> Void
+
+    var body: some View {
+        let fam = FontCatalog.family(of: style.fontName)
+        let members = fam.map { FontCatalog.members($0) } ?? []
+        let ps = FontCatalog.postScript(of: style.fontName)
+        let axis = FontCatalog.weightAxis(style.fontName)
+
+        LabeledContent("Font") {
+            Menu {
+                let installed = Set(FontCatalog.families)
+                let sug = FontCatalog.suggested.filter { installed.contains($0) }
+                Section("Suggested") {
+                    ForEach(sug, id: \.self) { f in familyButton(f, current: fam) }
+                }
+                Section("All fonts") {
+                    ForEach(FontCatalog.families, id: \.self) { f in familyButton(f, current: fam) }
+                }
+            } label: {
+                Text(fam ?? style.fontName)
+            }
+            .fixedSize()
+            .help("Every font installed on this Mac. Fonts you add with Font Book show up here after reopening the caption style.")
+        }
+
+        if members.count > 1 {
+            Picker("Weight", selection: Binding(get: { ps }, set: { v in set { $0.fontName = v; $0.fontWeight = nil } })) {
+                ForEach(members, id: \.postScript) { m in
+                    Text(m.style).font(.custom(m.postScript, size: 13)).tag(m.postScript)
+                }
+                if !members.contains(where: { $0.postScript == ps }) { Text(ps).tag(ps) }
+            }
+        }
+
+        if let ax = axis {
+            let base = FontCatalog.baseWeight(style.fontName) ?? ax.def
+            let v = style.fontWeight ?? base
+            HStack {
+                Text("Thickness")
+                Slider(value: Binding(get: { v }, set: { nv in set { $0.fontWeight = nv } }), in: ax.min...ax.max)
+                Text(FontCatalog.weightText(v, axisMax: ax.max))
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 32, alignment: .trailing)
+                Button { set { $0.fontWeight = nil } } label: { Image(systemName: "arrow.counterclockwise") }
+                    .buttonStyle(.borderless).disabled(style.fontWeight == nil)
+                    .help("Back to the weight chosen above")
+            }
+            .help("This is a variable font: drag for any thickness between its lightest and heaviest.")
+        } else if members.count <= 1, let f = fam {
+            Text("Only one weight of \(f) is installed. For heavier text, install its Bold or Black font files (Font Book), or use a thin Outline in the text colour.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder func familyButton(_ f: String, current: String?) -> some View {
+        Button {
+            guard let m = FontCatalog.closestMember(in: f, to: style.fontName) else { return }
+            set { $0.fontName = m.postScript; $0.fontWeight = nil }
+        } label: {
+            if f == current { Label(f, systemImage: "checkmark") } else { Text(f) }
+        }
     }
 }
