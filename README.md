@@ -42,6 +42,12 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
 
 Open the disk image and drag Winnow to Applications.
 
+From 1.6 on, Winnow checks this repository for a newer release when it opens (and about
+once a day while it stays open) and shows a banner when one is out, with the release
+notes and a download link. *Winnow → Check for Updates…* checks right away. The check
+asks GitHub only for the latest release and sends nothing about you or your projects;
+turn it off in Winnow → Settings.
+
 ## Claude
 
 - **Find Clips** sends only the transcript text, and only when you press the button.

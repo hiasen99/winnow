@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
             _ = AppState.main               // the control socket has to work even with no window
+            Updates.shared.start()          // looks for a newer Winnow on GitHub
             if AppDelegate.launchedInBackground {
                 Background.launched()
             } else {
@@ -187,6 +188,9 @@ struct Clips2App: App {
         .windowStyle(.titleBar)
         .defaultLaunchBehavior(AppDelegate.launchedInBackground ? .suppressed : .automatic)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Updates.shared.checkNowAndTell() }
+            }
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") { app.active?.undo() }.keyboardShortcut("z", modifiers: .command)
                 Button("Redo") { app.active?.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
@@ -301,11 +305,14 @@ struct RootView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.openWindow) private var openWindow
     var body: some View {
-        Group {
-            if let m = app.current {
-                ProjectView(model: m).id(ObjectIdentifier(m))
-            } else {
-                HomeView()
+        VStack(spacing: 0) {
+            UpdateBanner()
+            Group {
+                if let m = app.current {
+                    ProjectView(model: m).id(ObjectIdentifier(m))
+                } else {
+                    HomeView()
+                }
             }
         }
         .alert(Brand.name, isPresented: Binding(get: { app.errorText != nil }, set: { if !$0 { app.errorText = nil } })) {
@@ -324,8 +331,17 @@ struct SettingsView: View {
     @AppStorage("claudeModel") var model = ClipFinder.models[0].id
     @AppStorage("exportDir") var exportDir = ""
     @AppStorage("language") var language = "en-US"
+    @AppStorage(Updates.autoKey) var autoUpdates = true
+    @ObservedObject var updates = Updates.shared
     @State private var key = ClipFinder.loadKey()
     @State private var saved = false
+
+    private var updateStatus: String {
+        var s = "You have Winnow \(Updates.current)"
+        if let r = updates.available { s += " · \(r.version) is available" }
+        else if let d = updates.lastChecked { s += " · checked \(d.formatted(.relative(presentation: .named)))" }
+        return s
+    }
 
     var body: some View {
         Form {
@@ -353,6 +369,15 @@ struct SettingsView: View {
                     }
                 }
             }
+            Section("Updates") {
+                Toggle("Check GitHub for new versions of Winnow", isOn: $autoUpdates)
+                HStack {
+                    Text(updateStatus).font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    if updates.checking { ProgressView().controlSize(.small) }
+                    Button("Check Now") { updates.checkNowAndTell() }.disabled(updates.checking)
+                }
+            }
             Section("Transcription") {
                 Picker("Language", selection: $language) {
                     Text("English (US)").tag("en-US"); Text("English (UK)").tag("en-GB")
@@ -362,7 +387,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 420)
+        .frame(width: 520, height: 520)
     }
 }
 
@@ -406,6 +431,25 @@ enum Entry {
                     print("gain \(AudioAnalysis.levelMatchGain(a.envelope)) dB, \(a.sampleCount) samples")
                     exit(0)
                 } catch { print("alignmix failed: \(error)"); exit(1) }
+            }
+            dispatchMain()
+        }
+        if let i = args.firstIndex(of: "--updatetest") {
+            // --updatetest [pretend version]: version comparisons + a live GitHub check
+            let pretend = i + 1 < args.count ? args[i + 1] : nil
+            Task {
+                let cases: [(String, String, Bool)] = [("1.6", "1.5", true), ("v1.10.0", "1.9", true), ("1.5.0", "1.5", false),
+                                                       ("1.5", "1.6", false), ("2", "1.99", true), ("v1.6.0", "1.6", false)]
+                var ok = true
+                for c in cases where Updates.isNewer(c.0, than: c.1) != c.2 { print("compare FAILED \(c)"); ok = false }
+                print("compare \(ok ? "ok" : "FAILED")")
+                do {
+                    let r = try await Updates.fetchLatest()
+                    print("latest \(r.version) '\(r.title)' dmg \(r.download.absoluteString) page \(r.page.absoluteString) notes \(r.notes.count) chars")
+                    print("notes lines \(NoteLine.parse(r.notes).count)")
+                    if let p = pretend { print("newer than \(p): \(Updates.isNewer(r.version, than: p))") }
+                } catch { print("fetch FAILED: \(error.localizedDescription)"); ok = false }
+                exit(ok ? 0 : 1)
             }
             dispatchMain()
         }
