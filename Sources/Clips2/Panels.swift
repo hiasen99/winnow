@@ -496,6 +496,9 @@ struct CaptionStyleSheet: View {
                         .disabled(!s.wordBoxOn)
                     slider("Roundness", s.wordBoxRoundness, 0...1) { v in set { $0.wordBoxRound = v } }
                         .disabled(!s.wordBoxOn)
+                    Toggle("Glide to each word with a little bounce", isOn: Binding(get: { s.wordBoxGlides }, set: { v in set { $0.wordBoxGlide = v } }))
+                        .disabled(!s.wordBoxOn)
+                        .help("On: one box springs from word to word. Off: the box jumps straight to each word.")
                     Text("Tip: with “Highlight spoken word”, the spoken-word colour is the text colour on the box.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

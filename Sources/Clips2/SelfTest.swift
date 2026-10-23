@@ -342,6 +342,14 @@ enum SelfTest {
                     let lay = Captions.makeLayer(Captions.track(for: m.selectedClip!, project: m.project), style: m.project.captionStyle,
                                                  renderSize: m.selectedClip!.format.renderSize, total: m.selectedClip!.outputDuration)
                     log("caption layer pages: \(lay.sublayers?.count ?? 0)")
+                    // the spoken-word box glides on a spring: 100 pt wide box at x 0…100 → 60 pt box at x 200…260
+                    let kfm = WordBoxMotion.keyframes([(time: 1, rect: CGRect(x: 0, y: 0, width: 100, height: 50)),
+                                                       (time: 2, rect: CGRect(x: 200, y: 0, width: 60, height: 50))], end: 3)
+                    let moveKF = zip(kfm.times, kfm.rects).filter { $0.0 >= 2 }
+                    let peakX = moveKF.map { Double($0.1.midX) }.max() ?? 0
+                    let appear = kfm.rects.first.map { Double($0.width) } ?? 0
+                    log(String(format: "word box glide: %d key frames, appears at %.0f%% size, overshoot %.1f%%, settles in %.0f ms",
+                               kfm.times.count, appear, (peakX - 230) / 180 * 100, ((moveKF.last?.0 ?? 2) - 2) * 1000))
                     // a camera with its own caption height
                     let ang = m.project.videoIndices.first ?? 0
                     m.updateClip { c in

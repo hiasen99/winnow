@@ -456,10 +456,12 @@ struct CaptionStyle: Codable, Hashable {
     var wordBox: Bool? = nil
     var wordBoxColor: RGBA? = nil
     var wordBoxRound: Double? = nil       // 0 = square corners, 1 = pill
+    var wordBoxGlide: Bool? = nil         // the box glides to each new word on a spring (nil = on)
 
     var wordBoxOn: Bool { wordBox ?? false }
     var wordBoxRGBA: RGBA { wordBoxColor ?? RGBA(r: 1, g: 0.83, b: 0, a: 1) }
     var wordBoxRoundness: Double { wordBoxRound ?? 0.35 }
+    var wordBoxGlides: Bool { wordBoxGlide ?? true }
 }
 
 /// One caption you've edited by hand: shown from `start` to `end` (master time) with its own words.

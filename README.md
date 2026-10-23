@@ -25,7 +25,8 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
   the picture fills the frame behind it. Click any slider's value to type an exact number.
 - **Captions that are easy to fix.** Captions are blocks on the timeline: drag to move,
   drag edges to re-time, double-click to fix the text. Style presets for the look, with
-  any installed font and any weight (or any thickness on a variable font).
+  any installed font and any weight (or any thickness on a variable font). The box
+  behind the spoken word glides from word to word with a quick spring.
 - **Review fast.** Mark clips Use (U) or Rejected (X) and jump to the next, then export
   every clip marked Use into one folder in one go.
 - **Frames and thumbnails.** Save any frame as a PNG or JPEG (⇧⌘S), or grab frames with G

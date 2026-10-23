@@ -102,7 +102,7 @@ extension Control {
             "textColor": hex(s.textColor), "highlightColor": hex(s.activeColor),
             "outline": r3(s.strokeWidth), "outlineColor": hex(s.strokeColor), "shadow": s.shadow,
             "box": s.box, "boxColor": hex(s.boxColor),
-            "wordBox": s.wordBoxOn, "wordBoxColor": hex(s.wordBoxRGBA), "wordBoxRound": r3(s.wordBoxRoundness),
+            "wordBox": s.wordBoxOn, "wordBoxColor": hex(s.wordBoxRGBA), "wordBoxRound": r3(s.wordBoxRoundness), "wordBoxGlide": s.wordBoxGlides,
             "maxCharsPerLine": s.maxCharsPerLine, "maxLines": s.maxLines, "position": r3(s.positionY),
             "lineSpacing": r3(s.lineSpacing), "sideMargin": r3(s.sideMargin), "pauseBreak": r3(s.pauseBreak),
         ]
@@ -153,7 +153,7 @@ extension Control {
         return s
     }
 
-    static let styleHelp = "{font? (family name, e.g. \"Noto Sans\", keeps the current weight; or a PostScript name for one exact style), weight? (a style the family has like \"Black\" / \"Bold Italic\", a word thin…regular…bold…black, a number 100–900, or \"reset\"; on a variable font any value on its weight axis), fontSize? (fraction of frame width, 0.075 = default), mode? \"reveal\" (word by word) | \"highlight\" (spoken word coloured) | \"revealHighlight\" | \"line\", uppercase?, textColor?, highlightColor?, outline? (fraction of font size, 0 = none, 0.12 = thick), outlineColor?, shadow?, box? (box behind the lines), boxColor?, wordBox? (box behind the spoken word), wordBoxColor?, wordBoxRound? (0 square–1 pill), maxCharsPerLine?, maxLines?, position? (0 top–1 bottom, centre of the captions), lineSpacing?, sideMargin?, pauseBreak? (seconds of silence that start a new caption)}. Colours are hex \"#RRGGBB\" or \"#RRGGBBAA\". Applies to every clip in the project."
+    static let styleHelp = "{font? (family name, e.g. \"Noto Sans\", keeps the current weight; or a PostScript name for one exact style), weight? (a style the family has like \"Black\" / \"Bold Italic\", a word thin…regular…bold…black, a number 100–900, or \"reset\"; on a variable font any value on its weight axis), fontSize? (fraction of frame width, 0.075 = default), mode? \"reveal\" (word by word) | \"highlight\" (spoken word coloured) | \"revealHighlight\" | \"line\", uppercase?, textColor?, highlightColor?, outline? (fraction of font size, 0 = none, 0.12 = thick), outlineColor?, shadow?, box? (box behind the lines), boxColor?, wordBox? (box behind the spoken word), wordBoxColor?, wordBoxRound? (0 square–1 pill), wordBoxGlide? (true = the box springs from word to word, false = it jumps), maxCharsPerLine?, maxLines?, position? (0 top–1 bottom, centre of the captions), lineSpacing?, sideMargin?, pauseBreak? (seconds of silence that start a new caption)}. Colours are hex \"#RRGGBB\" or \"#RRGGBBAA\". Applies to every clip in the project."
 
     static func applyStyle(_ s0: CaptionStyle, _ a: Args) throws -> CaptionStyle {
         var s = s0
@@ -194,6 +194,7 @@ extension Control {
         if let v = a.bool("wordBox") { s.wordBox = v }
         if let c = try color(a.d["wordBoxColor"]) { s.wordBoxColor = c }
         if let v = a.num("wordBoxRound") { s.wordBoxRound = min(1, max(0, v)) }
+        if let v = a.bool("wordBoxGlide") { s.wordBoxGlide = v }
         if let v = a.num("maxCharsPerLine") { s.maxCharsPerLine = min(60, max(4, Int(v.rounded()))) }
         if let v = a.num("maxLines") { s.maxLines = min(4, max(1, Int(v.rounded()))) }
         if let v = a.num("position") { s.positionY = min(0.95, max(0.05, v)) }

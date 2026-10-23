@@ -243,6 +243,44 @@ enum Captions {
         return a
     }
 
+    /// Key frames that follow `values` at `times` (clip output time) along the whole clip.
+    private static func moving(_ keyPath: String, _ values: [Any], _ times: [Double], total: Double) -> CAKeyframeAnimation {
+        let a = CAKeyframeAnimation(keyPath: keyPath)
+        let T = max(total, 0.001)
+        var vals = values
+        var kt = times.map { NSNumber(value: min(1, max(0, $0 / T))) }
+        // linear key frames have to run from 0 to 1
+        if let f = kt.first, f.doubleValue > 0, let v = values.first { kt.insert(0, at: 0); vals.insert(v, at: 0) }
+        if let l = kt.last, l.doubleValue < 1, let v = values.last { kt.append(1); vals.append(v) }
+        a.values = vals
+        a.keyTimes = kt
+        a.calculationMode = .linear
+        a.beginTime = AVCoreAnimationBeginTimeAtZero
+        a.duration = T
+        a.isRemovedOnCompletion = false
+        a.fillMode = .both
+        return a
+    }
+
+    /// One box behind the spoken word for a whole caption, gliding from word to word (see `WordBoxMotion`).
+    private static func glidingWordBox(_ targets: [(time: Double, rect: CGRect)], until end: Double, style: CaptionStyle, total: Double) -> CALayer {
+        let wb = CALayer()
+        let sorted = targets.enumerated().sorted { ($0.element.time, $0.offset) < ($1.element.time, $1.offset) }.map { $0.element }
+        guard let first = sorted.first else { return wb }
+        let kf = WordBoxMotion.keyframes(sorted, end: end)
+        let round = CGFloat(style.wordBoxRoundness)
+        wb.frame = kf.rects.last ?? first.rect
+        wb.backgroundColor = style.wordBoxRGBA.cgColor
+        wb.cornerRadius = wb.frame.height / 2 * round
+        wb.opacity = 0
+        wb.add(discrete([0, 1, 0], [first.time, max(end, first.time + 0.05)], total: total), forKey: "wordbox")
+        guard kf.times.count > 1 else { return wb }
+        wb.add(moving("position", kf.rects.map { NSValue(point: CGPoint(x: $0.midX, y: $0.midY)) }, kf.times, total: total), forKey: "glide.position")
+        wb.add(moving("bounds", kf.rects.map { NSValue(rect: CGRect(origin: .zero, size: $0.size)) }, kf.times, total: total), forKey: "glide.bounds")
+        wb.add(moving("cornerRadius", kf.rects.map { NSNumber(value: Double($0.height / 2 * round)) }, kf.times, total: total), forKey: "glide.corner")
+        return wb
+    }
+
     /// One word drawn into a bitmap (CATextLayer doesn't render reliably during export).
     /// The outline is drawn first with round corners (no spikes on sharp letters) and the letter fill on top,
     /// so the outline only shows outside the letters.
@@ -313,6 +351,9 @@ enum Captions {
             pageLayer.opacity = 0
             pageLayer.add(discrete([0, 1, 0], [page.start, page.end], total: total), forKey: "show")
             let blockH = step * CGFloat(page.lines.count - 1) + lineH
+            // all boxes go under all of the caption's text
+            var under: [CALayer] = [], over: [CALayer] = []
+            var glide: [(time: Double, rect: CGRect)] = []
             var y = CGFloat(page.positionY ?? style.positionY) * renderSize.height - blockH / 2
             for (li, line) in page.lines.enumerated() {
                 let widths = line.map { measure(words[$0].text, font: f) }
@@ -329,9 +370,9 @@ enum Captions {
                         box.opacity = 0
                         box.add(discrete([0, 1], [words[line[0]].start], total: total), forKey: "box")
                     }
-                    pageLayer.addSublayer(box)
+                    under.append(box)
                 }
-                // boxes behind the spoken word go under all of this line's text
+                // boxes behind the spoken word
                 if style.wordBoxOn {
                     var bx = x
                     for (k, wi) in line.enumerated() {
@@ -339,13 +380,18 @@ enum Captions {
                         let nextStart = (wi + 1 < words.count) ? min(words[wi + 1].start, page.end) : page.end
                         let padX = f.pointSize * 0.16, padY = f.pointSize * 0.06
                         let r = CGRect(x: bx - padX, y: y - padY - f.pointSize * 0.04, width: widths[k] + 2 * padX, height: lineH * 0.95 + 2 * padY)
+                        if style.wordBoxGlides {
+                            glide.append((w.start, r))
+                            bx += widths[k] + space
+                            continue
+                        }
                         let wb = CALayer()
                         wb.frame = r
                         wb.backgroundColor = style.wordBoxRGBA.cgColor
                         wb.cornerRadius = r.height / 2 * CGFloat(style.wordBoxRoundness)
                         wb.opacity = 0
                         wb.add(discrete([0, 1, 0], [w.start, max(nextStart, w.start + 0.05)], total: total), forKey: "wordbox")
-                        pageLayer.addSublayer(wb)
+                        under.append(wb)
                         bx += widths[k] + space
                     }
                 }
@@ -361,18 +407,21 @@ enum Captions {
                     case .highlight, .line:
                         break
                     }
-                    pageLayer.addSublayer(base)
+                    over.append(base)
                     if style.mode == .highlight || style.mode == .revealHighlight {
                         let hi = textLayer(w.text, font: f, color: style.activeColor, style: style, shadow: false, at: frame.origin)
                         hi.opacity = 0
                         hi.add(discrete([0, 1, 0], [w.start, max(nextStart, w.start + 0.05)], total: total), forKey: "hi")
-                        pageLayer.addSublayer(hi)
+                        over.append(hi)
                     }
                     x += widths[k] + space
                 }
                 y += step
                 _ = li
             }
+            under.forEach { pageLayer.addSublayer($0) }
+            if !glide.isEmpty { pageLayer.addSublayer(glidingWordBox(glide, until: page.end, style: style, total: total)) }
+            over.forEach { pageLayer.addSublayer($0) }
             root.addSublayer(pageLayer)
             _ = pi
         }
