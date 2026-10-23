@@ -78,6 +78,12 @@ enum Store {
         var p = Project(name: name, angles: sources)
         p.language = UserDefaults.standard.string(forKey: "language") ?? "en-US"
         if let st = defaultCaptionStyle { p.captionStyle = st }
+        // the brand new projects start with (its caption / thumbnail look win over the default caption preset)
+        if let b = BrandStore.defaultBrand {
+            p.brandID = b.id
+            if let st = b.captionStyle { p.captionStyle = st }
+            if let ts = b.thumbnailStyle { p.thumbnailStyle = ts }
+        }
         try save(p, to: folder)
         return folder
     }

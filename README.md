@@ -27,6 +27,13 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
   drag edges to re-time, double-click to fix the text. Style presets for the look, with
   any installed font and any weight (or any thickness on a variable font). The box
   behind the spoken word glides from word to word with a quick spring.
+- **Follow popups and brands.** Put a popup on a clip that asks people to follow or
+  subscribe: your profile picture in a coloured ring with a Follow button, or a
+  YouTube-style bar with your name, a Subscribe button and a bell. It springs in, a hand
+  taps the button (Follow → Following, Subscribe → Subscribed and the bell rings) and it
+  springs out. Drag it in the viewer to place it and on the timeline to time it. Each
+  brand (one per channel or account) holds the name, @handle, picture, colours, button
+  words, and the caption and thumbnail look that go with it.
 - **Review fast.** Mark clips Use (U) or Rejected (X) and jump to the next, then export
   every clip marked Use into one folder in one go.
 - **Frames and thumbnails.** Save any frame as a PNG or JPEG (⇧⌘S), or grab frames with G

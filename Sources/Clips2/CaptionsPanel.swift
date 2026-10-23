@@ -81,6 +81,7 @@ struct CaptionsPanel: View {
                 .onAppear { presets = Store.loadPresets() }
                 Button { showStyle = true } label: { Label("Style…", systemImage: "textformat") }
                     .help("Font, colours, word animation, size and position")
+                BrandMenu(model: model)
                 Spacer()
                 Button { model.splitCaptionAtPlayhead() } label: { Image(systemName: "scissors") }
                     .help("Split the caption under the playhead")

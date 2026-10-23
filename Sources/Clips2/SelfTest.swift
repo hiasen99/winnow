@@ -553,6 +553,97 @@ enum SelfTest {
                 log("thumbnail: frame \(String(format: "%.2f", m.thumbnailOutTime(tc))) title \"\(m.thumbnailTitle(tc))\"; vertical \(dims(tv)) wide \(dims(tw)) big \(dims(tb)); logo kept by preset \(st.logoPath != nil) font \(st.fontName); "
                     + "saved in project \(reloaded.clips.first { $0.id == cid }?.thumbnail?.title != nil) style \(reloaded.thumbnailStyle?.logoPath != nil); beside batch export \(besides)")
             } catch { log("stills test failed: \(error)") }
+            // follow popups and brands
+            var testBrand: UUID? = nil
+            do {
+                let pdir = outDir.appendingPathComponent("popups", isDirectory: true)
+                try? FileManager.default.createDirectory(at: pdir, withIntermediateDirectories: true)
+                let cid = m.project.clips[0].id
+                m.select(clip: cid)
+                // a profile picture: a face-ish gold circle on green
+                let picURL = pdir.appendingPathComponent("pic.png")
+                if let ctx = CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0, space: Stills.sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                    ctx.setFillColor(CGColor(srgbRed: 0.24, green: 0.55, blue: 0.25, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+                    ctx.setFillColor(CGColor(srgbRed: 0.85, green: 0.65, blue: 0.2, alpha: 1)); ctx.fillEllipse(in: CGRect(x: 120, y: 40, width: 160, height: 200))
+                    if let im = ctx.makeImage() { try Stills.write(im, to: picURL, format: .png) }
+                }
+                let lib = BrandLibrary.shared
+                var br = lib.add(named: "Selftest Ministries")
+                testBrand = br.id
+                br.handle = "selftest"; br.subtitle = "12K subscribers"
+                br.color = RGBA(r: 0.8, g: 0.1, b: 0.15); br.color2 = RGBA(r: 0.95, g: 0.6, b: 0.1)
+                br.picture = try BrandStore.importPicture(picURL, for: br.id)
+                br.captionStyle = CaptionStyleSheet.builtIns[1].style; br.captionLookName = CaptionStyleSheet.builtIns[1].name
+                lib.save(br)
+                m.applyBrand(br.id)
+                let capApplied = m.project.captionStyle == br.captionStyle && m.project.brandID == br.id
+                let len = m.selectedClip!.outputDuration
+                let L = min(4.0, len - 0.2)
+                let a = m.addPopup(.circle, at: 0.1, length: L)!
+                let b = m.addPopup(.bar, at: 0.1, length: L)!
+                m.placePopup(b, at: .bottom)
+                let c1 = m.project.clips.first { $0.id == cid }!
+                let pa = c1.popups!.first { $0.id == a }!, pb = c1.popups!.first { $0.id == b }!
+                let sa = Popups.span(pa, clip: c1)
+                let tap = Popups.tapTime(pa, start: sa.start, end: sa.end)
+                let tapB = Popups.tapTime(pb, start: sa.start, end: sa.end)
+                let R = c1.format.renderSize
+                let ov = Overlay.layer(clip: c1, project: m.project, renderSize: R, total: c1.outputDuration, captions: true)
+                let popLayers = ov.sublayers?.first { $0.name == "popups" }?.sublayers?.count ?? 0
+                let vis = Popups.visible(clip: c1, project: m.project, renderSize: R, at: (tap ?? 1) + 0.3)
+                log("popups: brand caption look applied \(capApplied); clip \(String(format: "%.2f", len)) s; circle \(String(format: "%.2f–%.2f", sa.start, sa.end)) tap \(tap.map { String(format: "%.2f", $0) } ?? "none"); bar tap \(tapB.map { String(format: "%.2f", $0) } ?? "none"); layers \(popLayers); visible \(vis.count) boxes \(vis.map { "\(Int($0.rect.width))x\(Int($0.rect.height))@\(Int($0.rect.midX)),\(Int($0.rect.midY))" })")
+                // frames: popping in, hand arriving, after the tap, bell ringing, leaving
+                var shots: [(String, Double)] = [("in", sa.start + 0.12), ("settled", sa.start + 0.7)]
+                if let t = tap { shots += [("hand", t - 0.15), ("tapped", t + 0.35)] }
+                if let t = tapB { shots += [("bell", t + Popups.bellDelay + 0.12), ("bellDone", t + Popups.bellDelay + 0.7)] }
+                shots.append(("out", sa.end - 0.12))
+                var made: [String] = []
+                for (name, t) in shots {
+                    let img = try await Exporter.frame(project: m.project, clip: m.project.clips.first { $0.id == cid }!, auto: m.auto, loaded: m.sources, at: t, captions: true, maxSide: 960)
+                    let u = pdir.appendingPathComponent("popup-\(name).png")
+                    try Stills.write(img, to: u, format: .png)
+                    made.append(name)
+                }
+                // the brand stills (brand window previews)
+                for k in PopupKind.allCases {
+                    if let im = Popups.still(kind: k, brand: br, unit: 540) { try Stills.write(im, to: pdir.appendingPathComponent("still-\(k.rawValue).png"), format: .png) }
+                }
+                // viewer drag and timeline drag (one undo step each)
+                let x0 = pa.x
+                m.movePopup(a, dx: 108, dy: 0)
+                let x1 = m.popup(a)!.x
+                m.beginPopupDrag(a, mode: .move, atOutput: sa.start + 1)
+                m.updatePopupDrag(toOutput: sa.start + 1.25, spp: 0.0001)
+                m.updatePopupDrag(toOutput: sa.start + 1.5, spp: 0.0001)
+                m.endPopupDrag()
+                let moved = m.popupSpan(m.popup(a)!).start
+                m.undo()
+                let undone = m.popupSpan(m.popup(a)!).start
+                m.beginPopupDrag(a, mode: .end, atOutput: sa.end)
+                m.updatePopupDrag(toOutput: sa.end - 1, spp: 0.0001)
+                m.endPopupDrag()
+                let shorter = m.popup(a)!.length
+                m.undo()
+                // export with popups burned in, then read a frame back
+                let mp4 = pdir.appendingPathComponent("popups.mp4")
+                let ok = await m.export(cid, to: mp4, alsoSRT: false, quiet: true)
+                var burned = "?"
+                if ok, let t = tap {
+                    let gen = AVAssetImageGenerator(asset: AVURLAsset(url: mp4))
+                    gen.requestedTimeToleranceBefore = .zero; gen.requestedTimeToleranceAfter = .zero
+                    gen.maximumSize = CGSize(width: 960, height: 960)
+                    if let im = try? await gen.image(at: CMTime(seconds: t + 0.35, preferredTimescale: 600)).image {
+                        try Stills.write(im, to: pdir.appendingPathComponent("export-tapped.png"), format: .png); burned = "saved"
+                    }
+                }
+                m.saveNow()
+                let re = try Store.load(m.folder)
+                let reC = re.clips.first { $0.id == cid }
+                log(String(format: "popups: frames %@; drag in viewer x %.3f→%.3f; timeline move %.2f→%.2f (undo %.2f); end drag length %.2f→%.2f; export %@ frame %@; reload %d popups brand %@",
+                           made.joined(separator: ","), x0, x1, sa.start, moved, undone, pa.length, shorter, ok ? "ok" : "FAILED", burned,
+                           reC?.popups?.count ?? -1, re.brandID == br.id ? "kept" : "LOST"))
+            } catch { log("popups test failed: \(error)") }
+            if let id = testBrand { BrandLibrary.shared.remove(id); log("test brand removed: \(BrandStore.brand(id) == nil)") }
             Store.delete(folder)
             log("SELFTEST OK")
             return 0

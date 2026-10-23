@@ -13,6 +13,9 @@ final class PlayerEngine: ObservableObject {
     @Published var isPlaying = false
     @Published private(set) var itemVersion = 0
     @Published var renderSize = CGSize(width: 1920, height: 1080)
+    /// Bumped when something drawn over the picture changed without reloading it (popups).
+    @Published private(set) var overlayVersion = 0
+    func overlayChanged() { overlayVersion += 1 }
     private(set) var built: BuiltEdit?
     private(set) var captionLayer: CALayer?
     private var observer: Any?
@@ -166,22 +169,75 @@ final class PlayerNSView: NSView {
     var onDragEnd: (() -> Void)?
     var onDragBegin: (() -> Void)?
     private var lastDrag: NSPoint? = nil
+    // follow popups: pick one with a click, drag it to move it
+    var popupAt: ((CGPoint) -> UUID?)?
+    var onPopupPick: ((UUID?) -> Void)?
+    var onPopupMoved: ((UUID, CGFloat, CGFloat) -> Void)?
+    /// The picked popup's box (render pixels, top-left origin) to outline, when it's on screen.
+    var popupOutline: CGRect? = nil
+    private let popupSel = CAShapeLayer()
+    private var popDrag: (id: UUID, start: NSPoint, layer: CALayer?, origin: CGPoint, moved: Bool)? = nil
+
+    /// A point in the view → render pixels (top-left origin).
+    func renderPoint(_ p: NSPoint) -> CGPoint {
+        let r = videoRect, k = r.width / max(1, renderSize.width)
+        return CGPoint(x: (p.x - r.minX) / k, y: (r.maxY - p.y) / k)
+    }
+    private func popupLayer(_ id: UUID) -> CALayer? {
+        guard let root = captionHost?.sublayers?.first, let pops = root.sublayers?.first(where: { $0.name == "popups" }) else { return nil }
+        return pops.sublayers?.first { $0.name == "popup:" + id.uuidString }
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with e: NSEvent) {
         let p = convert(e.locationInWindow, from: nil)
+        popDrag = nil
+        if videoRect.contains(p), let id = popupAt?(renderPoint(p)) {
+            onPopupPick?(id)
+            let l = popupLayer(id)
+            popDrag = (id, p, l, l?.position ?? .zero, false)
+            lastDrag = nil
+            NSCursor.closedHand.set()
+            return
+        }
+        if videoRect.contains(p) { onPopupPick?(nil) }
         guard videoRect.contains(p), canDrag?() == true else { lastDrag = nil; return }
         lastDrag = p
         onDragBegin?()
         NSCursor.closedHand.set()
     }
     override func mouseDragged(with e: NSEvent) {
+        if var d = popDrag {
+            let p = convert(e.locationInWindow, from: nil)
+            let k = videoRect.width / max(1, renderSize.width)
+            let dx = (p.x - d.start.x) / k, dy = -(p.y - d.start.y) / k
+            if abs(p.x - d.start.x) + abs(p.y - d.start.y) > 2 { d.moved = true }
+            if let l = d.layer {
+                CATransaction.begin(); CATransaction.setDisableActions(true)
+                l.position = CGPoint(x: d.origin.x + dx, y: d.origin.y + dy)
+                popupSel.isHidden = true
+                CATransaction.commit()
+            }
+            popDrag = d
+            return
+        }
         guard let last = lastDrag else { return }
         let p = convert(e.locationInWindow, from: nil)
         onDrag?(p.x - last.x, p.y - last.y, videoRect.width / max(1, renderSize.width))
         lastDrag = p
     }
     override func mouseUp(with e: NSEvent) {
+        if let d = popDrag {
+            popDrag = nil
+            if d.moved {
+                let p = convert(e.locationInWindow, from: nil)
+                let k = videoRect.width / max(1, renderSize.width)
+                onPopupMoved?(d.id, (p.x - d.start.x) / k, -(p.y - d.start.y) / k)
+            }
+            needsLayout = true
+            window?.invalidateCursorRects(for: self)
+            return
+        }
         if lastDrag != nil { onDragEnd?() }
         lastDrag = nil
         window?.invalidateCursorRects(for: self)
@@ -208,6 +264,12 @@ final class PlayerNSView: NSView {
         guideLayer.lineDashPattern = [6, 5]
         guideLayer.lineWidth = 1
         layer?.addSublayer(guideLayer)
+        popupSel.strokeColor = NSColor.systemYellow.cgColor
+        popupSel.fillColor = nil
+        popupSel.lineDashPattern = [5, 4]
+        popupSel.lineWidth = 1.5
+        popupSel.zPosition = 10
+        layer?.addSublayer(popupSel)
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -234,6 +296,13 @@ final class PlayerNSView: NSView {
             guideLayer.path = path
             guideLayer.isHidden = false
         } else { guideLayer.isHidden = true }
+        // the picked popup
+        if let pr = popupOutline, popDrag == nil {
+            let k = r.width / max(1, renderSize.width)
+            let vr = CGRect(x: r.minX + pr.minX * k, y: r.maxY - pr.maxY * k, width: pr.width * k, height: pr.height * k).insetBy(dx: -4, dy: -4)
+            popupSel.path = CGPath(roundedRect: vr, cornerWidth: 6, cornerHeight: 6, transform: nil)
+            popupSel.isHidden = false
+        } else { popupSel.isHidden = true }
         CATransaction.commit()
         window?.invalidateCursorRects(for: self)
     }
@@ -272,7 +341,20 @@ struct PlayerView: NSViewRepresentable {
             v.onDrag = { [weak m] dx, dy, k in m?.dragFraming(dx: dx, dy: dy, k: k) }
             v.onPinch = { [weak m] g in m?.pinchFraming(g) }
             v.onDragEnd = { [weak m] in m?.endGesture() }
+            v.popupAt = { [weak m] pt in m?.popupAt(render: pt) }
+            v.onPopupPick = { [weak m] id in
+                guard let m else { return }
+                if id != nil { m.engine.pause() }
+                if m.selectedPopup != id { m.selectPopup(id) }
+            }
+            v.onPopupMoved = { [weak m] id, dx, dy in m?.movePopup(id, dx: dx, dy: dy) }
+            let outline = engine.isPlaying ? nil : m.selectedPopupRect
+            if outline != v.popupOutline { v.popupOutline = outline; v.needsLayout = true }
             v.window?.invalidateCursorRects(for: v)
+        }
+        if context.coordinator.overlay != engine.overlayVersion {
+            context.coordinator.overlay = engine.overlayVersion
+            v.needsLayout = true
         }
         if context.coordinator.version != engine.itemVersion || v.guides != guides {
             context.coordinator.version = engine.itemVersion
@@ -281,5 +363,5 @@ struct PlayerView: NSViewRepresentable {
         }
     }
     func makeCoordinator() -> Coord { Coord() }
-    final class Coord { var version = -1 }
+    final class Coord { var version = -1; var overlay = -1 }
 }

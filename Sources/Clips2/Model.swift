@@ -222,6 +222,8 @@ struct Clip: Codable, Identifiable, Hashable {
     var grabs: [Double]? = nil
     /// The clip's thumbnail: which frame, and its own title text. nil = the default frame and the clip's title.
     var thumbnail: ClipThumbnail? = nil
+    /// Follow / subscribe popups shown over the picture. (optional so older projects still load)
+    var popups: [FollowPopup]? = nil
 
     var start: Double { ranges.first?.start ?? 0 }
     var end: Double { ranges.last?.end ?? 0 }
@@ -511,6 +513,8 @@ struct Project: Codable {
     var grabs: [Double]? = nil
     /// How clip thumbnails look in this project (title, shade, logo, picture). nil = the default thumbnail style.
     var thumbnailStyle: ThumbnailStyle? = nil
+    /// The project's brand (from the brand library): who follow popups are for. nil = none picked.
+    var brandID: UUID? = nil
 
     enum Stage: String, Codable { case new, synced, transcribed }
 

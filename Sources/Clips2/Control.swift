@@ -176,6 +176,7 @@ enum Control {
         if let s = c.score { d["score"] = r3(s) }
         if !c.note.isEmpty { d["note"] = c.note }
         if let b = c.captionBlocks, !b.isEmpty { d["handEditedCaptions"] = b.count }
+        if let ps = c.popups, !ps.isEmpty { d["popups"] = ps.count }
         return d
     }
 
@@ -231,6 +232,7 @@ enum Control {
             "thumbnailStyle": thumbStyleSummary(m.thumbnailStyle),
             "autoCamera": ["minShot": r3(p.minShot), "switchLead": r3(p.switchLead)],
             "captionStyle": styleSummary(p.captionStyle),
+            "brand": m.projectBrand?.name ?? "none",
         ] as [String: Any]
         out["clips"] = p.clips.enumerated().map { clipSummary($1, index: $0) }
         out["state"] = state(m)
@@ -249,6 +251,7 @@ enum Control {
         }
         d["sound"] = heard(c.audio.on, p)
         d["thumbnail"] = thumbInfo(m, c)
+        d["popups"] = popupInfo(m, c)
         d["grabbedFrames"] = grabList(m, c)
         d["soundChanges"] = c.soundChanges.map { s -> [String: Any] in
             ["time": r3(s.time), "hear": s.on.map { heard($0, p) as Any } ?? "the clip's own sound"]
@@ -358,7 +361,7 @@ enum Control {
     static func hasProject(_ app: AppState) -> Bool { app.claude != nil }
     static func hasClips(_ app: AppState) -> Bool { !(app.claude?.project.clips.isEmpty ?? true) }
 
-    static let commands: [ControlCommand] = baseCommands + editCommands + captionCommands + renderCommands + stillCommands
+    static let commands: [ControlCommand] = baseCommands + editCommands + captionCommands + renderCommands + stillCommands + popupCommands
 
     static let baseCommands: [ControlCommand] = [
         ControlCommand(id: "app.show", label: "Show Winnow Window", menu: "Open Winnow (Dock, Finder, Spotlight)",

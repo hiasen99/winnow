@@ -15,8 +15,7 @@ extension Exporter {
         let size = CGSize(width: maxSide, height: maxSide)
         if let clip, captions {
             let vc = built.videoComposition.mutableCopy() as! AVMutableVideoComposition
-            let track = Captions.track(for: clip, project: p, renderSize: built.renderSize)
-            let layer = Captions.makeLayer(track, style: p.captionStyle, renderSize: built.renderSize, total: built.duration)
+            let layer = Overlay.layer(clip: clip, project: p, renderSize: built.renderSize, total: built.duration, captions: true)
             let parent = CALayer()
             parent.frame = CGRect(origin: .zero, size: built.renderSize)
             let videoLayer = CALayer()

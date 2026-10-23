@@ -33,6 +33,7 @@ final class ProjectModel: ObservableObject {
         didSet {
             if tlSel != nil && selection != nil { selection = nil }
             if tlSel != nil && selectedCaption != nil { selectedCaption = nil }
+            if tlSel != nil && selectedPopup != nil { selectedPopup = nil }
             if tlSegmentSelected { tlSegmentSelected = false }
         }
     }
@@ -61,7 +62,9 @@ final class ProjectModel: ObservableObject {
     @Published var showGuides = true
     @Published var showSpeakers = false
     /// The caption picked on the timeline or in the captions panel.
-    @Published var selectedCaption: UUID? = nil
+    @Published var selectedCaption: UUID? = nil {
+        didSet { if selectedCaption != nil && selectedPopup != nil { selectedPopup = nil } }
+    }
     /// Set to start typing in a caption's row in the captions panel.
     @Published var editingCaption: UUID? = nil
     /// A caption being moved / re-timed on the timeline.
@@ -74,6 +77,12 @@ final class ProjectModel: ObservableObject {
     @Published var showFraming = false
     /// The thumbnail editor (in place of the captions panel).
     @Published var showThumbnail = false
+    /// The follow popup picked on the timeline or in the viewer (its settings show on the right).
+    @Published var selectedPopup: UUID? = nil
+    /// A popup being moved / re-timed on the timeline.
+    @Published var popupDrag: PopupDrag? = nil
+    /// The brand library window.
+    @Published var showBrands = false
     /// How many windows show this project. With none (Claude working on it in the background) it stays silent.
     var viewers = 0 { didSet { engine.player.isMuted = viewers <= 0 } }
 
@@ -789,7 +798,7 @@ final class ProjectModel: ObservableObject {
             // captions always show in the viewer; "Burn in" only decides what the export gets
             if let c = clip {
                 let track = Captions.track(for: c, project: project, renderSize: b.renderSize)
-                captions = Captions.makeLayer(track, style: project.captionStyle, renderSize: b.renderSize, total: b.duration)
+                captions = Overlay.layer(clip: c, project: project, renderSize: b.renderSize, total: b.duration, captions: true, track: track)
             }
             let mix = CompositionBuilder.audioMix(b, mix: clip?.audio ?? fullMix, angles: project.angles, clip: clip)
             let t = outTime ?? (outputTime(keepMaster) ?? 0)
@@ -853,6 +862,7 @@ final class ProjectModel: ObservableObject {
         selection = nil
         editingWords = nil
         selectedCaption = nil; editingCaption = nil; captionDrag = nil
+        selectedPopup = nil; popupDrag = nil
         tlZoom = 1; tlStart = 0; tlSel = nil
         if let c = selectedClip {
             rebuild(at: (m >= c.start && m <= c.end) ? (c.outputTime(forMaster: m) ?? 0) : 0, play: false)

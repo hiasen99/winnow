@@ -224,6 +224,11 @@ struct Clips2App: App {
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                 Button("Grab Frame / Un-grab  (G)") { app.active?.toggleGrab() }
                 Button("Save Grabbed Frames…") { if let m = app.active { Task { await m.saveGrabsAsking() } } }
+                Divider()
+                Button("Add Follow Popup at Playhead") { app.active?.addPopup(.circle) }
+                Button("Add Subscribe Bar at Playhead") { app.active?.addPopup(.bar) }
+                Button("Brands…") { app.active?.showBrands = true }
+                Divider()
                 Button("Use Frame as Thumbnail  (T)") { app.active?.useFrameAsThumbnail() }
                 Button("Edit Thumbnail…") { if let m = app.active, m.selectedClip != nil { m.showThumbnail = true } }
                 Button("Save Thumbnail…") { if let m = app.active, let id = m.selectedClipID { Task { await m.saveThumbnailAsking(id) } } }

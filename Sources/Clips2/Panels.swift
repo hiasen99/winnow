@@ -9,29 +9,13 @@ struct ClipInspector: View {
 
     var body: some View {
         if let clip = model.selectedClip {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Position").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Picker("", selection: Binding(get: { clip.format }, set: { f in model.updateClip { $0.format = f } })) {
-                    ForEach(ClipFormat.allCases) { Text($0.label).tag($0) }
+            VStack(alignment: .leading, spacing: 8) {
+                // position, popups and thumbnail side by side; the details open from each
+                HStack(alignment: .top, spacing: 6) {
+                    PositionTile(model: model, engine: model.engine, clip: clip)
+                    PopupsTile(model: model, clip: clip)
+                    ThumbnailTile(model: model, engine: model.engine, clip: clip)
                 }
-                .pickerStyle(.segmented).labelsHidden()
-                .help("The shape of the finished video")
-                HStack(spacing: 8) {
-                    Button { model.showFraming.toggle() } label: { Label("Adjust framing…", systemImage: "crop") }
-                        .controlSize(.small)
-                        .help("Move and zoom each camera's picture inside the frame, or just one shot. You can also drag the picture in the viewer, or pinch to zoom.")
-                        .popover(isPresented: $model.showFraming, arrowEdge: .trailing) {
-                            FramingPopover(model: model, engine: model.engine).frame(width: 330)
-                        }
-                    Spacer()
-                    if clip.format == .vertical {
-                        Toggle("Safe zones", isOn: $model.showGuides).controlSize(.small)
-                            .help("Show the area social apps leave clear of their buttons and captions")
-                    }
-                }
-                ShotScopeRow(model: model, engine: model.engine)
-                Divider()
-                ThumbnailRow(model: model, engine: model.engine, clip: clip)
                 GrabsRow(model: model)
             }
         } else {
@@ -94,7 +78,7 @@ struct FramingPopover: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("Framing · \(clip.format.label)").font(.headline)
+                        Text("Position").font(.headline)
                         Spacer()
                         Menu("More") {
                             Button("Reset every camera to centre") {
@@ -108,6 +92,19 @@ struct FramingPopover: View {
                         .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
                         .help("Reset, or copy this framing to your other clips of the same shape")
                     }
+                    HStack(spacing: 8) {
+                        Text("Shape").font(.caption).foregroundStyle(.secondary)
+                        Picker("", selection: Binding(get: { clip.format }, set: { f in model.updateClip { $0.format = f } })) {
+                            ForEach(ClipFormat.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                        .help("The shape of the finished video")
+                    }
+                    if clip.format == .vertical {
+                        Toggle("Show safe zones in the viewer", isOn: $model.showGuides).controlSize(.small)
+                            .help("Show the area social apps leave clear of their buttons and captions")
+                    }
+                    Divider()
                     Picker("", selection: $model.frameScope) {
                         Text("Every shot").tag(ProjectModel.FrameScope.camera)
                         Text("This shot only").tag(ProjectModel.FrameScope.shot)

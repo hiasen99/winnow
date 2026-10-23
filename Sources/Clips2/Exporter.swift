@@ -8,10 +8,9 @@ enum Exporter {
                        to url: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
         let built = try CompositionBuilder.build(project: p, clip: clip, auto: auto, loaded: loaded, format: clip.format)
         let vc = built.videoComposition.mutableCopy() as! AVMutableVideoComposition
-        if clip.captions {
-            let style = p.captionStyle
-            let track = Captions.track(for: clip, project: p, renderSize: built.renderSize)
-            let captions = Captions.makeLayer(track, style: style, renderSize: built.renderSize, total: built.duration)
+        if Overlay.needed(clip: clip, captions: clip.captions) {
+            // captions (when burned in) and follow popups
+            let captions = Overlay.layer(clip: clip, project: p, renderSize: built.renderSize, total: built.duration, captions: clip.captions)
             let parent = CALayer()
             parent.frame = CGRect(origin: .zero, size: built.renderSize)
             let videoLayer = CALayer()

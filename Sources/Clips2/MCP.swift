@@ -5,7 +5,7 @@ import Foundation
 /// (ControlClient starts Clips 2 in the background if it isn't open).
 enum MCPServer {
 
-    static let version = "0.5"
+    static let version = "0.6"
 
     static var instructions: String {
         """
@@ -33,6 +33,10 @@ enum MCPServer {
         frame.grab marks frames (like pressing G) and frame.saveGrabs saves them all. Each clip has a thumbnail: thumbnail.set picks its frame and title, \
         thumbnail.style sets the project's look (title font/size/position, dark fade, logo, brightness/contrast/saturation), \
         render_frame {thumbnail: true} shows it, thumbnail.save writes it; exporting a video also saves "<name> thumbnail.jpg" beside it unless withExport is off.
+        Follow popups: popup.add puts a popup on a clip asking people to follow / subscribe — "circle" (profile picture in a coloured ring with a Follow pill) \
+        or "youtube" (a bar with picture, name, Subscribe button and bell). It springs in, the button gets tapped (Follow → Following; Subscribe → Subscribed, then the bell rings) \
+        and springs out. Popups use the project's brand (brand.use); brands (brand.list / brand.set: name, @handle, profile picture, colours, button words, \
+        and a caption / thumbnail look that comes with them) are shared by every project. Check one with render_frame at its tapsAt time.
         export.video / export.audio / export.srt export clips (also "use" for every clip marked Use — the Export Marked Use button in the clip list) in the background; export.status follows them.
         """
     }

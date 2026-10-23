@@ -13,7 +13,10 @@ struct TLLayout {
     var clipRows: Int = 1
     /// inside a clip the lane under the picture shows its captions (on the full recording: the words)
     var capsMode: Bool = false
+    /// inside a clip with follow popups: a lane for them above the picture
+    var popupsLane: Bool = false
 
+    static let popupsH: CGFloat = 20
     static let rulerH: CGFloat = 22
     static let clipRowH: CGFloat = 15
     var clipsH: CGFloat { CGFloat(clipRows) * Self.clipRowH + 4 }
@@ -24,7 +27,8 @@ struct TLLayout {
 
     var rulerY: CGFloat { 0 }
     var clipsY: CGFloat { Self.rulerH }
-    var videoY: CGFloat { Self.rulerH + (hasClipsLane ? clipsH + 2 : 2) }
+    var popupsY: CGFloat { Self.rulerH + 1 }
+    var videoY: CGFloat { Self.rulerH + (hasClipsLane ? clipsH + 2 : (popupsLane ? Self.popupsH + 3 : 2)) }
     var videoH: CGFloat { max(40, min(84, (height - videoY - Self.scrollH - wordsLaneH) * 0.5)) }
     var wordsY: CGFloat { videoY + videoH + 3 }
     var audioY: CGFloat { wordsY + wordsLaneH + 3 }
@@ -36,13 +40,14 @@ struct TLLayout {
     func t(_ x: CGFloat) -> Double { start + Double(x / max(1, width)) * vd }
 }
 
-enum TLZone { case ruler, clips, video, words, audio, scroller }
+enum TLZone { case ruler, clips, popups, video, words, audio, scroller }
 
 extension TLLayout {
     func zone(_ y: CGFloat) -> TLZone {
         if y >= scrollY - 1 { return .scroller }
         if y < Self.rulerH { return .ruler }
         if hasClipsLane && y < videoY { return .clips }
+        if popupsLane && y < videoY { return .popups }
         if y < wordsY - 1 { return .video }
         if y < audioY - 1 { return .words }
         return .audio
@@ -70,7 +75,8 @@ struct TimelinePanel: View {
     @State private var dragStartX: CGFloat = 0
     @State private var scrollGrab: Double = 0
     @State private var capPending: (id: UUID, mode: CaptionDrag.Mode, t: Double)? = nil
-    enum DragMode { case none, scrub, select, trim, scroll, capPending, capDrag }
+    @State private var popPending: (id: UUID, mode: CaptionDrag.Mode, t: Double)? = nil
+    enum DragMode { case none, scrub, select, trim, scroll, capPending, capDrag, popPending, popDrag }
 
     var engine: PlayerEngine { model.engine }
 
@@ -114,7 +120,7 @@ struct TimelinePanel: View {
         let rows = model.selectedClip == nil ? clipRows().count : 1
         return TLLayout(width: max(1, size.width), height: max(1, size.height), start: start, vd: max(0.001, vd),
                         hasClipsLane: model.selectedClip == nil && !model.project.clips.isEmpty, clipRows: max(1, rows),
-                        capsMode: model.selectedClip != nil)
+                        capsMode: model.selectedClip != nil, popupsLane: !(model.selectedClip?.popups ?? []).isEmpty)
     }
 
     /// Clips on the full recording stacked so overlapping ones don't cover each other (up to 3 rows).
@@ -196,6 +202,25 @@ struct TimelinePanel: View {
         return best.map { ($0.0, $0.1) }
     }
 
+    /// The popup under the mouse on the popups lane, and whether it's an edge (re-time) or the middle (move).
+    func popupHit(at p: CGPoint, _ L: TLLayout) -> (id: UUID, mode: CaptionDrag.Mode)? {
+        guard L.popupsLane, L.zone(p.y) == .popups else { return nil }
+        var best: (UUID, CaptionDrag.Mode, CGFloat)? = nil
+        for pp in model.clipPopups {
+            let sp = model.popupSpan(pp)
+            let xa = L.x(sp.start), xb = L.x(sp.end)
+            guard p.x >= xa - 5, p.x <= xb + 5 else { continue }
+            let edgeTol: CGFloat = xb - xa < 18 ? 3 : 6
+            var mode = CaptionDrag.Mode.move, score: CGFloat = 50
+            if abs(p.x - xa) <= edgeTol { mode = .start; score = abs(p.x - xa) }
+            else if abs(p.x - xb) <= edgeTol { mode = .end; score = abs(p.x - xb) }
+            else if !(p.x > xa && p.x < xb) { continue }
+            if pp.id == model.selectedPopup { score -= 1 }
+            if best == nil || score <= best!.2 { best = (pp.id, mode, score) }
+        }
+        return best.map { ($0.0, $0.1) }
+    }
+
     func word(at p: CGPoint, _ L: TLLayout) -> TLWord? {
         let t = L.t(p.x)
         return model.tlWords().first { t >= $0.start - L.spp * 2 && t <= $0.end + L.spp * 2 }
@@ -204,6 +229,8 @@ struct TimelinePanel: View {
     func cursor(_ p: CGPoint, _ L: TLLayout) -> NSCursor {
         if dragMode == .trim || edge(at: p, L) != nil { return .resizeLeftRight }
         if dragMode == .capDrag, let d = model.captionDrag { return d.mode == .move ? .closedHand : .resizeLeftRight }
+        if dragMode == .popDrag, let d = model.popupDrag { return d.mode == .move ? .closedHand : .resizeLeftRight }
+        if let h = popupHit(at: p, L) { return h.mode == .move ? .openHand : .resizeLeftRight }
         if let c = caption(at: p, L) { return c.mode == .move ? .openHand : .resizeLeftRight }
         switch L.zone(p.y) {
         case .ruler: return marker(at: p, L) != nil || grab(at: p, L) != nil || thumbMark(at: p, L) != nil ? .pointingHand : .resizeLeftRight
@@ -238,6 +265,18 @@ struct TimelinePanel: View {
         if zone == .ruler, let g = grab(at: p, L) { engine.pause(); engine.seek(g.out); return }
         if zone == .ruler, let o = thumbMark(at: p, L) { engine.pause(); engine.seek(o); return }
         if zone == .ruler { dragMode = .scrub; engine.scrub(t); return }
+        if zone == .popups {
+            if let hit = popupHit(at: p, L) {
+                model.tlSel = nil
+                model.selectedCaption = nil
+                model.selectPopup(hit.id)
+                popPending = (hit.id, hit.mode, t)
+                dragMode = .popPending
+            } else {
+                model.selectPopup(nil)
+            }
+            return
+        }
         if zone == .clips {
             if let c = clip(at: p, L) {
                 if e.clickCount == 2 { model.select(clip: c.id) }
@@ -301,6 +340,15 @@ struct TimelinePanel: View {
         case .capDrag:
             model.updateCaptionDrag(toOutput: t, spp: L.spp)
             autoScroll(p.x, L)
+        case .popPending:
+            if abs(p.x - dragStartX) > 3, let c = popPending {
+                model.beginPopupDrag(c.id, mode: c.mode, atOutput: c.t)
+                dragMode = .popDrag
+                model.updatePopupDrag(toOutput: t, spp: L.spp)
+            }
+        case .popDrag:
+            model.updatePopupDrag(toOutput: t, spp: L.spp)
+            autoScroll(p.x, L)
         case .none: break
         }
     }
@@ -326,9 +374,14 @@ struct TimelinePanel: View {
             // a click on a caption: select it and show it in the viewer
             if let c = capPending, let it = model.captionItem(c.id) { engine.seek(min(max(t, it.start), max(it.start, it.end - 0.01))) }
         case .capDrag: model.endCaptionDrag()
+        case .popPending:
+            // a click on a popup: pick it and show it in the viewer
+            if let c = popPending { model.selectPopup(c.id, show: true) }
+        case .popDrag: model.endPopupDrag()
         case .scroll, .none: break
         }
         capPending = nil
+        popPending = nil
         dragMode = .none
     }
 
@@ -384,6 +437,18 @@ struct TimelinePanel: View {
             return m
         }
         switch L.zone(p.y) {
+        case .popups:
+            if let h = popupHit(at: p, L), let pp = model.popup(h.id) {
+                model.selectPopup(pp.id)
+                m.add("Edit Popup") { model.selectPopup(pp.id, show: true) }
+                m.add("Start at Playhead") { model.movePopupToPlayhead(pp.id) }
+                m.add("Duplicate") { model.duplicatePopup(pp.id) }
+                m.add(pp.kind == .circle ? "Change to YouTube Bar" : "Change to Circle") {
+                    model.updatePopup(pp.id) { $0.kind = pp.kind == .circle ? .bar : .circle }
+                }
+                m.add("Delete Popup") { model.removePopup(pp.id) }
+                m.addSeparator()
+            }
         case .clips:
             if let c = clip(at: p, L) {
                 m.add("Open “\(c.title)”") { model.select(clip: c.id) }
@@ -467,6 +532,9 @@ struct TimelinePanel: View {
         m.add("Save Frame at Playhead…") { Task { await model.saveFrameAsking() } }
         if model.selectedClip != nil {
             m.add("Use Frame at Playhead as Thumbnail (T)") { model.useFrameAsThumbnail() }
+            m.addSeparator()
+            m.add("Add Follow Popup (Circle) at Playhead") { model.addPopup(.circle) }
+            m.add("Add Subscribe Bar (YouTube) at Playhead") { model.addPopup(.bar) }
         }
         m.addSeparator()
         m.add("Zoom to Fit") { model.fitTimeline() }
@@ -654,6 +722,7 @@ struct TimelinePanel: View {
                      at: CGPoint(x: pr.midX, y: pr.maxY - 2), anchor: .bottom)
         }
 
+        if L.popupsLane { drawPopups(ctx, L) }
         if L.capsMode { drawCaptions(ctx, L) } else {
         // words
         let ws = model.tlWords()
@@ -784,6 +853,39 @@ struct TimelinePanel: View {
 }
 
 extension TimelinePanel {
+    /// The popups lane: one block per follow popup, in its brand's colour, with a tick where the button gets tapped.
+    func drawPopups(_ ctx: GraphicsContext, _ L: TLLayout) {
+        let end = L.start + L.vd
+        ctx.fill(Path(CGRect(x: 0, y: L.popupsY, width: L.width, height: TLLayout.popupsH)), with: .color(Brand.gold.opacity(0.06)))
+        for pp in model.clipPopups {
+            let sp = model.popupSpan(pp)
+            guard sp.end > L.start && sp.start < end else { continue }
+            let xa = L.x(sp.start), xb = L.x(sp.end)
+            let r = CGRect(x: xa + 0.5, y: L.popupsY + 1, width: max(3, xb - xa - 1), height: TLLayout.popupsH - 2)
+            let b = Popups.brand(for: pp, project: model.project)
+            let col = b.color.color
+            let sel = pp.id == model.selectedPopup
+            ctx.fill(Path(roundedRect: r, cornerRadius: 5), with: .color(col.opacity(sel ? 0.85 : 0.6)))
+            ctx.stroke(Path(roundedRect: r, cornerRadius: 5), with: .color(col), lineWidth: 1)
+            if let tp = Popups.tapTime(pp, start: sp.start, end: sp.end) {
+                for tt in [tp] + (pp.kind == .bar ? [tp + Popups.bellDelay] : []) {
+                    let x = L.x(tt)
+                    if x > r.minX + 2 && x < r.maxX - 2 {
+                        ctx.fill(Path(CGRect(x: x - 0.5, y: r.maxY - 5, width: 1.5, height: 4)), with: .color(.white.opacity(0.85)))
+                    }
+                }
+            }
+            if sel { ctx.stroke(Path(roundedRect: r.insetBy(dx: -0.5, dy: -0.5), cornerRadius: 5), with: .color(.yellow), lineWidth: 2) }
+            if r.width > 16 {
+                var tctx = ctx; tctx.clip(to: Path(r.insetBy(dx: 4, dy: 0)))
+                let w = Popups.words(pp, b).before
+                let label = Text(Image(systemName: pp.kind.icon)) + Text(" " + w + " · " + b.name)
+                tctx.draw(label.font(.system(size: 10, weight: .semibold)).foregroundColor(.white),
+                          at: CGPoint(x: r.minX + 5, y: r.midY), anchor: .leading)
+            }
+        }
+    }
+
     /// The captions lane: one block per caption, like Final Cut's caption lane.
     func drawCaptions(_ ctx: GraphicsContext, _ L: TLLayout) {
         let end = L.start + L.vd

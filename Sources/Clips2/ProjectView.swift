@@ -48,9 +48,12 @@ struct ProjectView: View {
                             }
                         }
                     }
-                    .opacity((showStyle || model.showThumbnail) && model.selectedClip != nil ? 0 : 1)
+                    .opacity((showStyle || model.showThumbnail || model.popup(model.selectedPopup) != nil) && model.selectedClip != nil ? 0 : 1)
                     if model.showThumbnail && model.selectedClip != nil {
                         ThumbnailSheet(model: model, engine: model.engine)
+                            .background(Color(nsColor: .windowBackgroundColor))
+                    } else if model.selectedClip != nil && model.popup(model.selectedPopup) != nil {
+                        PopupPanel(model: model, engine: model.engine)
                             .background(Color(nsColor: .windowBackgroundColor))
                     } else if showStyle && model.selectedClip != nil {
                         CaptionStyleSheet(model: model, onDone: { showStyle = false })
@@ -58,7 +61,8 @@ struct ProjectView: View {
                     }
                 }
                 .frame(minWidth: 300, idealWidth: 400)
-                .onChange(of: showStyle) { _, v in if v { model.showThumbnail = false } }
+                .onChange(of: showStyle) { _, v in if v { model.showThumbnail = false; model.selectedPopup = nil } }
+                .onChange(of: model.selectedPopup) { _, v in if v != nil { showStyle = false } }
                 .onChange(of: model.showThumbnail) { _, v in if v { showStyle = false } }
             }
             .frame(maxHeight: .infinity)
@@ -113,6 +117,7 @@ struct ProjectView: View {
         .onDisappear { keys.remove(); model.viewers -= 1 }
         .sheet(isPresented: $showFinder) { FindClipsSheet(model: model) }
         .sheet(isPresented: $model.showSpeakers) { SpeakersSheet(model: model) }
+        .sheet(isPresented: $model.showBrands) { BrandsSheet(model: model) }
 
         .alert("Something went wrong", isPresented: Binding(get: { model.errorText != nil }, set: { if !$0 { model.errorText = nil } })) {
             Button("OK") { model.errorText = nil }
@@ -655,11 +660,13 @@ func handleKey(_ model: ProjectModel, _ e: NSEvent) -> Bool {
     case 49: model.engine.toggle(); return true                                   // space
     case 51, 117:                                                                  // delete
         if model.tlSel != nil { model.cutTimelineSelection(); return true }
+        if model.selectedClip != nil, let id = model.selectedPopup { model.removePopup(id); return true }
         if model.selectedClip != nil, let id = model.selectedCaption { model.deleteCaption(id); return true }
         if model.selectedClip != nil, model.selection != nil { model.cutSelection(); return true }
         return false
     case 53:                                                                       // escape
         if model.editingWords != nil { model.editingWords = nil; return true }
+        if model.selectedPopup != nil { model.selectPopup(nil); return true }
         if model.selectedCaption != nil { model.selectedCaption = nil; return true }
         if model.tlSel != nil { model.tlSel = nil; return true }
         if model.selection != nil { model.selection = nil; return true }
