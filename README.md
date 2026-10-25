@@ -40,8 +40,9 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
   and save them all at once. Each clip gets a thumbnail: pick its frame from the clip,
   anywhere in the recording, or a picture file, then add its title (starting from your
   caption style), a dark fade, your logo, and brightness / contrast / saturation.
-- **Export** vertical, square or wide video with burned-in captions (and a thumbnail
-  beside it), audio only, or an .srt file.
+- **Export** vertical, square or wide video with burned-in captions, audio only, or an
+  .srt file. A clip's thumbnail is saved beside its video once you've made one; for any
+  other clip it's a checkbox in the Export window.
 
 ## Download
 

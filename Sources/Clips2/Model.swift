@@ -403,8 +403,10 @@ struct ClipThumbnail: Codable, Hashable {
     var angle: Int? = nil
     /// A picture file used instead of a frame from the video.
     var imagePath: String? = nil
+    /// true = made in the thumbnail editor even with no frame / title of its own (e.g. only the look was changed).
+    var made: Bool? = nil
 
-    var isEmpty: Bool { time == nil && title == nil && fromRecording != true && angle == nil && imagePath == nil }
+    var isEmpty: Bool { time == nil && title == nil && fromRecording != true && angle == nil && imagePath == nil && made != true }
     var source: ThumbSource { imagePath != nil ? .file : (fromRecording == true ? .recording : .clip) }
 }
 

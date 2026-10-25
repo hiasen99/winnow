@@ -28,7 +28,7 @@ struct ThumbnailStyle: Codable, Hashable {
     var brightness = 0.0            // -0.3 … 0.3
     var contrast = 1.0              // 0.6 … 1.6
     var saturation = 1.0            // 0 … 2
-    var withExport = true           // save one next to every exported video
+    var withExport = true           // save a clip's thumbnail next to its exported video (only clips with one made, unless asked)
     var png = false                 // file type (false = JPEG)
 
     init() {}
@@ -255,6 +255,11 @@ extension ProjectModel {
     var thumbnailStyleIsCaptions: Bool { project.thumbnailStyle == nil && Store.defaultThumbnailStyle == nil }
 
     func setThumbnailStyle(_ s: ThumbnailStyle) { liveEdit { $0.thumbnailStyle = s } }
+    /// Changing the look in a clip's thumbnail editor counts as making that clip's thumbnail (it then goes out with the export).
+    func markThumbnailMade(_ id: UUID) {
+        guard let i = project.clips.firstIndex(where: { $0.id == id }), project.clips[i].thumbnail == nil else { return }
+        liveEdit { $0.clips[i].thumbnail = ClipThumbnail(made: true) }
+    }
 
     /// The moment a clip's thumbnail shows, in clip time: the frame you picked, or one second in.
     /// (For a frame from the recording or a picture file, the nearest moment in the clip.)
@@ -404,12 +409,18 @@ extension ProjectModel {
         await saveThumbnail(c, to: url)
     }
 
-    /// After a clip's video is exported: "<video name> thumbnail.jpg" beside it (when the style says so).
-    func writeThumbnail(_ c: Clip, beside video: URL) async {
+    /// After a clip's video is exported: "<video name> thumbnail.jpg" beside it.
+    /// `force` nil = only when the clip has a thumbnail made (and the style says so); true / false = the export window's checkbox.
+    func writeThumbnail(_ c: Clip, beside video: URL, force: Bool? = nil) async {
         let s = thumbnailStyle
-        guard s.withExport else { return }
+        guard force ?? (s.withExport && c.thumbnailMade) else { return }
         let url = video.deletingLastPathComponent()
             .appendingPathComponent(video.deletingPathExtension().lastPathComponent + " thumbnail." + s.ext)
         await saveThumbnail(c, to: url, quiet: true)
     }
+}
+
+extension Clip {
+    /// The clip has a thumbnail of its own: a picked frame, title, recording frame, picture file, or a look made in its editor.
+    var thumbnailMade: Bool { !(thumbnail?.isEmpty ?? true) }
 }

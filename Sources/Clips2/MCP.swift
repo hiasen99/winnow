@@ -32,7 +32,7 @@ enum MCPServer {
         Pictures: frame.save saves one frame as a PNG/JPEG (a clip's frame as it exports, or the full recording's camera frame); \
         frame.grab marks frames (like pressing G) and frame.saveGrabs saves them all. Each clip has a thumbnail: thumbnail.set picks its frame and title, \
         thumbnail.style sets the project's look (title font/size/position, dark fade, logo, brightness/contrast/saturation), \
-        render_frame {thumbnail: true} shows it, thumbnail.save writes it; exporting a video also saves "<name> thumbnail.jpg" beside it unless withExport is off.
+        render_frame {thumbnail: true} shows it, thumbnail.save writes it; exporting a video also saves "<name> thumbnail.jpg" beside it only when that clip has a thumbnail made (thumbnail.set; clip_inspect thumbnail.made), unless withExport is off; export.video {thumbnail: true} makes one for every clip.
         Follow popups: popup.add puts a popup on a clip asking people to follow / subscribe — "circle" (profile picture in a coloured ring with a Follow pill) \
         or "youtube" (a bar with picture, name, Subscribe button and bell). It springs in, the button gets tapped (Follow → Following; Subscribe → Subscribed, then the bell rings) \
         and springs out. Popups use the project's brand (brand.use); brands (brand.list / brand.set: name, @handle, profile picture, colours, button words, \

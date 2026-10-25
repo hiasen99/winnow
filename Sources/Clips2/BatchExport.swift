@@ -23,7 +23,8 @@ extension ProjectModel {
             return
         }
         engine.pause()
-        let panel = BatchExportPanel(count: clips.count, folder: exportFolder, burnIn: clips.contains { $0.captions })
+        let made = thumbnailStyle.withExport ? clips.filter { $0.thumbnailMade }.count : 0
+        let panel = BatchExportPanel(count: clips.count, folder: exportFolder, burnIn: clips.contains { $0.captions }, thumbnailsMade: made)
         guard let folder = panel.run() else { return }
         UserDefaults.standard.set(folder.path, forKey: "exportDir.\(project.id.uuidString)")
         UserDefaults.standard.set(folder.path, forKey: "lastExportDir")
@@ -46,7 +47,8 @@ extension ProjectModel {
             default: return
             }
         }
-        await runBatchExport(jobs, kind: kind, alsoSRT: panel.alsoSRT, burnIn: kind == .video ? panel.burnIn : nil, folder: folder)
+        await runBatchExport(jobs, kind: kind, alsoSRT: panel.alsoSRT, burnIn: kind == .video ? panel.burnIn : nil,
+                             allThumbnails: panel.allThumbnails, folder: folder)
     }
 
     /// One file per clip, named after the clip; two clips with the same title get "Title 2".
@@ -65,7 +67,9 @@ extension ProjectModel {
         }
     }
 
-    func runBatchExport(_ jobs: [(clip: Clip, url: URL)], kind: ExportKind, alsoSRT: Bool, burnIn: Bool?, folder: URL) async {
+    /// `allThumbnails` = also make thumbnails for clips that have none made (clips with one always get theirs).
+    func runBatchExport(_ jobs: [(clip: Clip, url: URL)], kind: ExportKind, alsoSRT: Bool, burnIn: Bool?,
+                        allThumbnails: Bool = false, folder: URL) async {
         guard !jobs.isEmpty else { return }
         batchExport = BatchExportState(done: 0, total: jobs.count, current: jobs[0].clip.title)
         defer { batchExport = nil }
@@ -76,7 +80,8 @@ extension ProjectModel {
             batchExport?.current = j.clip.title
             batchExport?.currentID = j.clip.id
             let t0 = Date()
-            if await export(j.clip.id, to: j.url, kind: kind, alsoSRT: alsoSRT, burnIn: burnIn, quiet: true) {
+            if await export(j.clip.id, to: j.url, kind: kind, alsoSRT: alsoSRT, burnIn: burnIn,
+                            thumbnail: allThumbnails ? true : nil, quiet: true) {
                 saved.append(j.url)
                 Log.write(String(format: "batch export %d/%d %@ in %.1fs", i + 1, jobs.count, j.url.lastPathComponent, Date().timeIntervalSince(t0)))
             } else {
@@ -107,14 +112,18 @@ final class BatchExportPanel: NSObject {
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let srtBox = NSButton(checkboxWithTitle: "Also save captions (.srt) next to each video", target: nil, action: nil)
     private let burnBox = NSButton(checkboxWithTitle: "Burn the captions into the videos", target: nil, action: nil)
+    private let thumbBox = NSButton(checkboxWithTitle: "Also make thumbnails for clips that don't have one", target: nil, action: nil)
     private let count: Int
+    private let thumbsMade: Int
     private(set) var kind: ExportKind
     var alsoSRT: Bool { srtBox.state == .on }
     var burnIn: Bool { burnBox.state == .on }
+    var allThumbnails: Bool { kind == .video && thumbBox.state == .on }
 
-    init(count: Int, folder: URL, burnIn: Bool) {
+    init(count: Int, folder: URL, burnIn: Bool, thumbnailsMade: Int = 0) {
         let d = UserDefaults.standard
         self.count = count
+        self.thumbsMade = thumbnailsMade
         kind = ExportKind(rawValue: d.integer(forKey: "exportKind")) ?? .video
         super.init()
         panel.title = "Export \(count) Clip\(count == 1 ? "" : "s") Marked Use"
@@ -133,18 +142,23 @@ final class BatchExportPanel: NSObject {
         burnBox.state = burnIn ? .on : .off
         burnBox.target = self
         burnBox.action = #selector(formatChanged)
+        let without = count - thumbnailsMade
+        thumbBox.title = thumbnailsMade == 0
+            ? "Also make a thumbnail for each clip (none of them has one yet)"
+            : "Also make thumbnails for the \(without) clip\(without == 1 ? "" : "s") without one (\(thumbnailsMade) already ha\(thumbnailsMade == 1 ? "s" : "ve") theirs)"
+        thumbBox.state = .off
 
         let label = NSTextField(labelWithString: "Format:")
         let row = NSStackView(views: [label, popup])
         row.orientation = .horizontal
         row.spacing = 8
-        let stack = NSStackView(views: [row, burnBox, srtBox])
+        let stack = NSStackView(views: [row, burnBox, srtBox, thumbBox])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 20, bottom: 10, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        let holder = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 92))
+        let holder = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 118))
         holder.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: holder.leadingAnchor),
@@ -165,6 +179,7 @@ final class BatchExportPanel: NSObject {
     private func apply() {
         srtBox.isHidden = kind != .video
         burnBox.isHidden = kind != .video
+        thumbBox.isHidden = kind != .video || thumbsMade >= count
         let each = "Choose a folder. Each clip is saved as its own file, named after the clip."
         switch kind {
         case .video: panel.message = each + (burnBox.state == .on ? " Captions are burned in." : " No captions on the picture.")

@@ -141,7 +141,8 @@ extension Control {
         return url
     }
 
-    static func queueExports(_ m: ProjectModel, _ jobs: [(id: UUID, title: String, url: URL, kind: ExportKind, srt: Bool)], wait: Double) async -> [String: Any] {
+    static func queueExports(_ m: ProjectModel, _ jobs: [(id: UUID, title: String, url: URL, kind: ExportKind, srt: Bool)], wait: Double,
+                             thumbnail: Bool? = nil) async -> [String: Any] {
         let prev = exportTask
         exportQueued += jobs.count
         exportTask = Task { @MainActor in
@@ -149,7 +150,7 @@ extension Control {
             for j in jobs {
                 m.errorText = nil
                 let t0 = Date()
-                await m.export(j.id, to: j.url, kind: j.kind, alsoSRT: j.srt)
+                await m.export(j.id, to: j.url, kind: j.kind, alsoSRT: j.srt, thumbnail: thumbnail)
                 let ok = m.errorText == nil && FileManager.default.fileExists(atPath: j.url.path)
                 var e: [String: Any] = ["clip": j.title, "file": j.url.path, "ok": ok, "seconds": r3(Date().timeIntervalSince(t0))]
                 if !ok { e["error"] = m.errorText ?? "The file wasn't written." }
@@ -179,7 +180,7 @@ extension Control {
 
     static let renderCommands: [ControlCommand] = [
         ControlCommand(id: "export.video", label: "Export Video", menu: "Toolbar ▸ Export / Clip ▸ Export Clip…", key: "⌘E",
-                       params: "{clip? | clips?: [numbers/ids/titles] | \"use\" (every clip marked Use) | \"all\"; path?: folder (or a .mp4 file for one clip; default the project's export folder, never overwrites); burnIn?: true/false (default: the clip's setting); srt?: also save captions as .srt (default true); wait?: seconds to wait for it to finish (max 150, default 0 = return at once)}",
+                       params: "{clip? | clips?: [numbers/ids/titles] | \"use\" (every clip marked Use) | \"all\"; path?: folder (or a .mp4 file for one clip; default the project's export folder, never overwrites); burnIn?: true/false (default: the clip's setting); srt?: also save captions as .srt (default true); thumbnail?: true = save a thumbnail beside every video, false = none (default: only clips with a thumbnail made); wait?: seconds to wait for it to finish (max 150, default 0 = return at once)}",
                        enabled: { hasClips($0) },
                        run: { app, a in
             let m = try model(app)
@@ -190,7 +191,7 @@ extension Control {
             }
             let srt = a.bool("srt") ?? true
             let jobs = try clips.map { c in (id: c.id, title: c.title, url: try exportURL(m, c, a, ext: "mp4", many: clips.count > 1), kind: ExportKind.video, srt: srt) }
-            return await queueExports(m, jobs, wait: a.num("wait") ?? 0)
+            return await queueExports(m, jobs, wait: a.num("wait") ?? 0, thumbnail: a.bool("thumbnail"))
         }),
         ControlCommand(id: "export.audio", label: "Export Audio Only", menu: "Export window ▸ Audio only",
                        params: "{clip? | clips?, format?: \"m4a\" (default) | \"wav\", path?, wait?}",

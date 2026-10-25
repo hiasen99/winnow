@@ -1246,7 +1246,7 @@ final class ProjectModel: ObservableObject {
         guard let clip = project.clips.first(where: { $0.id == id }) else { return }
         engine.pause()
         let ep = ExportPanel(title: "Export “\(clip.title)”", baseName: Exporter.safeName(clip.title), folder: exportFolder,
-                             burnIn: clip.captions)
+                             burnIn: clip.captions, thumbnailMade: clip.thumbnailMade && thumbnailStyle.withExport)
         guard let url = ep.run() else { return }
         if ep.kind == .video, ep.burnIn != clip.captions, let i = project.clips.firstIndex(where: { $0.id == id }) {
             liveEdit { $0.clips[i].captions = ep.burnIn }    // remembered for this clip's next export
@@ -1254,13 +1254,14 @@ final class ProjectModel: ObservableObject {
         let dir = url.deletingLastPathComponent()
         UserDefaults.standard.set(dir.path, forKey: "exportDir.\(project.id.uuidString)")
         UserDefaults.standard.set(dir.path, forKey: "lastExportDir")
-        await export(id, to: url, kind: ep.kind, alsoSRT: ep.alsoSRT)
+        await export(id, to: url, kind: ep.kind, alsoSRT: ep.alsoSRT, thumbnail: ep.thumbnail)
     }
 
     /// `burnIn` overrides the clip's own caption setting for this export only; `quiet` skips the "Saved…" notice (batch exports).
+    /// `thumbnail` nil = save the thumbnail beside the video only if the clip has one made; true / false = always / never.
     @discardableResult
     func export(_ id: UUID, to url: URL, kind: ExportKind = .video, alsoSRT: Bool = true,
-                burnIn: Bool? = nil, quiet: Bool = false) async -> Bool {
+                burnIn: Bool? = nil, thumbnail: Bool? = nil, quiet: Bool = false) async -> Bool {
         guard var clip = project.clips.first(where: { $0.id == id }) else { return false }
         if let b = burnIn { clip.captions = b }
         let dir = url.deletingLastPathComponent()
@@ -1276,7 +1277,7 @@ final class ProjectModel: ObservableObject {
             case .video:
                 try await Exporter.export(project: project, clip: clip, auto: auto, loaded: sources, to: url, progress: progress)
                 if alsoSRT { try? srt.write(to: url.deletingPathExtension().appendingPathExtension("srt"), atomically: true, encoding: .utf8) }
-                await writeThumbnail(clip, beside: url)
+                await writeThumbnail(clip, beside: url, force: thumbnail)
             case .audioM4A, .audioWAV:
                 try await Exporter.exportAudio(project: project, clip: clip, auto: auto, loaded: sources, to: url,
                                                wav: kind == .audioWAV, progress: progress)

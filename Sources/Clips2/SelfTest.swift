@@ -552,6 +552,22 @@ enum SelfTest {
                 let besides = ((try? FileManager.default.contentsOfDirectory(atPath: outDir.appendingPathComponent("batch").path)) ?? []).filter { $0.contains("thumbnail") }
                 log("thumbnail: frame \(String(format: "%.2f", m.thumbnailOutTime(tc))) title \"\(m.thumbnailTitle(tc))\"; vertical \(dims(tv)) wide \(dims(tw)) big \(dims(tb)); logo kept by preset \(st.logoPath != nil) font \(st.fontName); "
                     + "saved in project \(reloaded.clips.first { $0.id == cid }?.thumbnail?.title != nil) style \(reloaded.thumbnailStyle?.logoPath != nil); beside batch export \(besides)")
+                // the export rule: a thumbnail goes out with the video only when the clip has one made (or it's asked for)
+                let rdir = sdir.appendingPathComponent("thumbrule", isDirectory: true)
+                try? FileManager.default.createDirectory(at: rdir, withIntermediateDirectories: true)
+                let rext = m.thumbnailStyle.ext
+                let beside: (String) -> Bool = { n in FileManager.default.fileExists(atPath: rdir.appendingPathComponent(n + " thumbnail." + rext).path) }
+                let keep = m.project.clips.first { $0.id == cid }!.thumbnail
+                m.updateClip(rebuild: false) { $0.thumbnail = nil }
+                _ = await m.export(cid, to: rdir.appendingPathComponent("none.mp4"), alsoSRT: false, quiet: true)
+                _ = await m.export(cid, to: rdir.appendingPathComponent("asked.mp4"), alsoSRT: false, thumbnail: true, quiet: true)
+                m.markThumbnailMade(cid)
+                let madeFlag = m.project.clips.first { $0.id == cid }!.thumbnailMade
+                _ = await m.export(cid, to: rdir.appendingPathComponent("made.mp4"), alsoSRT: false, quiet: true)
+                _ = await m.export(cid, to: rdir.appendingPathComponent("declined.mp4"), alsoSRT: false, thumbnail: false, quiet: true)
+                m.updateClip(rebuild: false) { $0.thumbnail = keep }
+                let ruleOK = !beside("none") && beside("asked") && madeFlag && beside("made") && !beside("declined")
+                log("thumbnail export rule \(ruleOK ? "OK" : "FAILED"): none \(beside("none")) asked \(beside("asked")) made \(madeFlag)/\(beside("made")) declined \(beside("declined"))")
             } catch { log("stills test failed: \(error)") }
             // follow popups and brands
             var testBrand: UUID? = nil

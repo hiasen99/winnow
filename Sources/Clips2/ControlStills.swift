@@ -28,7 +28,8 @@ extension Control {
 
     static func thumbInfo(_ m: ProjectModel, _ c: Clip) -> [String: Any] {
         var d: [String: Any] = ["frame": r3(m.thumbnailOutTime(c)), "framePicked": c.thumbnail?.time != nil,
-                                "title": m.thumbnailTitle(c), "ownTitle": c.thumbnail?.title != nil]
+                                "title": m.thumbnailTitle(c), "ownTitle": c.thumbnail?.title != nil,
+                                "made": c.thumbnailMade, "savedWithExport": c.thumbnailMade && m.thumbnailStyle.withExport]
         if let t = c.thumbnail?.time { d["recordingTime"] = r3(t) }
         d["from"] = (c.thumbnail?.source ?? .clip).rawValue
         if c.thumbnail?.fromRecording == true {
@@ -55,7 +56,7 @@ extension Control {
         return d
     }
 
-    static let thumbStyleHelp = "{showTitle?, font? (family or PostScript name), weight? (style name, thin…black, 100–900, \"reset\"), size? (fraction of the picture's shorter side, 0.1 = default), textColor?, uppercase?, align? \"center\" | \"left\", height? (centre of the title: 0 top – 1 bottom, 0.8 = default), width? (0.4–0.96 of the picture), outline? (fraction of font size, 0 = none, 0.1 = thick), outlineColor?, shadow?, shade? (dark fade behind the title, 0–0.95), shadeColor?, logo? (full path to an image, or \"none\"), logoSize? (fraction of width), logoCorner? topLeft|topRight|bottomLeft|bottomRight, brightness? (-0.3–0.3), contrast? (0.6–1.6), saturation? (0–2), withExport? (save a thumbnail beside every exported video), format? \"jpeg\" | \"png\", preset? (a built-in or saved preset name), matchCaptions?: true (title look back to the caption style), reset?: true}. Until changed, the look follows the caption style. Colours are hex. Applies to every clip in the project."
+    static let thumbStyleHelp = "{showTitle?, font? (family or PostScript name), weight? (style name, thin…black, 100–900, \"reset\"), size? (fraction of the picture's shorter side, 0.1 = default), textColor?, uppercase?, align? \"center\" | \"left\", height? (centre of the title: 0 top – 1 bottom, 0.8 = default), width? (0.4–0.96 of the picture), outline? (fraction of font size, 0 = none, 0.1 = thick), outlineColor?, shadow?, shade? (dark fade behind the title, 0–0.95), shadeColor?, logo? (full path to an image, or \"none\"), logoSize? (fraction of width), logoCorner? topLeft|topRight|bottomLeft|bottomRight, brightness? (-0.3–0.3), contrast? (0.6–1.6), saturation? (0–2), withExport? (save a clip's thumbnail beside its exported video; only clips with a thumbnail made), format? \"jpeg\" | \"png\", preset? (a built-in or saved preset name), matchCaptions?: true (title look back to the caption style), reset?: true}. Until changed, the look follows the caption style. Colours are hex. Applies to every clip in the project."
 
     static func applyThumbStyle(_ s0: ThumbnailStyle, _ a: Args) throws -> ThumbnailStyle {
         var s = s0
@@ -183,11 +184,14 @@ extension Control {
             return ["files": files.map { $0.path }]
         }),
         ControlCommand(id: "thumbnail.set", label: "Set a Clip's Thumbnail", menu: "T / clip settings ▸ Thumbnail", key: "T", changesProject: true,
-                       params: "{clip?; the picture, one of: seconds? (a frame inside the clip, seconds into it), recordingTime? (seconds anywhere in the full recording, also outside the clip) with camera? (\"A\", \"B\"… or \"auto\" = whoever is talking), image? (full path to a picture file, or \"none\"); title?: its own text (\"\" = the clip's title; \\n for a new line); resetFrame?: true = back to one second in}. Check it with render_frame {thumbnail: true}.",
+                       params: "{clip?; the picture, one of: seconds? (a frame inside the clip, seconds into it), recordingTime? (seconds anywhere in the full recording, also outside the clip) with camera? (\"A\", \"B\"… or \"auto\" = whoever is talking), image? (full path to a picture file, or \"none\"); title?: its own text (\"\" = the clip's title; \\n for a new line); resetFrame?: true = back to one second in; made?: true = count it as made with the default frame (so it's saved with exports), false = forget this clip's thumbnail entirely (frame, title, picture)}. Only clips with a thumbnail made get one saved beside their video export. Check it with render_frame {thumbnail: true}.",
                        enabled: { hasClips($0) },
                        run: { app, a in
             let m = try model(app)
             let c = try targetClip(m, a)
+            if a.bool("made") == false, let i = m.project.clips.firstIndex(where: { $0.id == c.id }) {
+                m.edit(rebuild: false) { $0.clips[i].thumbnail = nil }
+            } else if a.bool("made") == true { m.changeThumbnail(c.id) { $0.made = true } }
             if a.bool("resetFrame") == true { m.changeThumbnail(c.id) { $0.time = nil; $0.fromRecording = nil; $0.angle = nil; $0.imagePath = nil } }
             else if a.has("seconds") { m.setThumbnailClipTime(c.id, out: stillTime(m, c, a)) }
             if let r = a.num("recordingTime") {

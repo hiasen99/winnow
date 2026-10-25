@@ -545,9 +545,9 @@ struct ThumbnailTile: View {
     var body: some View {
         let th = clip.thumbnail
         let src = th?.source ?? .clip
-        let picked = th?.time != nil || src == .file
         let t = model.thumbnailOutTime(clip)
-        InspectorTile(title: "Thumbnail", icon: "photo", tint: picked ? Brand.green : .secondary, detail: detail(src, t)) {
+        InspectorTile(title: "Thumbnail", icon: "photo", tint: clip.thumbnailMade ? Brand.green : .secondary,
+                      detail: clip.thumbnailMade ? detail(src, t) : "none yet") {
             Menu {
                 Button("Use This Frame  (T)") { model.useFrameAsThumbnail() }
                 if src == .clip && th?.time != nil {

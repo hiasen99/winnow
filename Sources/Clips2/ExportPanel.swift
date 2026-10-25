@@ -32,11 +32,15 @@ final class ExportPanel: NSObject {
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let srtBox = NSButton(checkboxWithTitle: "Also save captions (.srt) next to the video", target: nil, action: nil)
     private let burnBox = NSButton(checkboxWithTitle: "Burn the captions into the video", target: nil, action: nil)
+    private let thumbBox = NSButton(checkboxWithTitle: "Save the thumbnail next to the video", target: nil, action: nil)
     private(set) var kind: ExportKind
     var alsoSRT: Bool { srtBox.state == .on }
     var burnIn: Bool { burnBox.state == .on }
+    /// The thumbnail checkbox (video only): on = save "<name> thumbnail.jpg" beside the video.
+    var thumbnail: Bool { kind == .video && thumbBox.state == .on }
 
-    init(title: String, baseName: String, folder: URL, burnIn: Bool = true) {
+    /// `thumbnailMade`: the clip has a thumbnail of its own, so the box starts ticked; otherwise it starts unticked.
+    init(title: String, baseName: String, folder: URL, burnIn: Bool = true, thumbnailMade: Bool = false) {
         let d = UserDefaults.standard
         kind = ExportKind(rawValue: d.integer(forKey: "exportKind")) ?? .video
         super.init()
@@ -55,18 +59,21 @@ final class ExportPanel: NSObject {
         burnBox.state = burnIn ? .on : .off
         burnBox.target = self
         burnBox.action = #selector(formatChanged)
+        thumbBox.title = thumbnailMade ? "Save this clip's thumbnail next to the video"
+                                       : "Also make a thumbnail (this clip doesn't have one yet)"
+        thumbBox.state = thumbnailMade ? .on : .off
 
         let label = NSTextField(labelWithString: "Format:")
         let row = NSStackView(views: [label, popup])
         row.orientation = .horizontal
         row.spacing = 8
-        let stack = NSStackView(views: [row, burnBox, srtBox])
+        let stack = NSStackView(views: [row, burnBox, srtBox, thumbBox])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 20, bottom: 10, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        let holder = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 92))
+        let holder = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 118))
         holder.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: holder.leadingAnchor),
@@ -89,6 +96,7 @@ final class ExportPanel: NSObject {
         panel.nameFieldStringValue = base + "." + kind.ext
         srtBox.isHidden = kind != .video
         burnBox.isHidden = kind != .video
+        thumbBox.isHidden = kind != .video
         switch kind {
         case .video: panel.message = burnBox.state == .on
             ? "The finished clip with its camera cuts, sound and burned-in captions."

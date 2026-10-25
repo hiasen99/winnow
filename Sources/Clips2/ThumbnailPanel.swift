@@ -150,7 +150,14 @@ struct ThumbnailSheet: View {
     @State private var titleClip: UUID? = nil
 
     var s: ThumbnailStyle { model.thumbnailStyle }
-    func set(_ change: (inout ThumbnailStyle) -> Void) { var st = s; change(&st); model.setThumbnailStyle(st) }
+    /// A look change; it also counts as making this clip's thumbnail (`made: false` for the saving settings).
+    func set(made: Bool = true, _ change: (inout ThumbnailStyle) -> Void) {
+        var st = s; change(&st)
+        guard st != s else { return }
+        if made { markMade() }
+        model.setThumbnailStyle(st)
+    }
+    func markMade() { if let id = model.selectedClip?.id { model.markThumbnailMade(id) } }
 
     var body: some View {
         if let clip = model.selectedClip {
@@ -189,10 +196,15 @@ struct ThumbnailSheet: View {
                             Button("Save Thumbnail…") { Task { await model.saveThumbnailAsking(clip.id) } }
                             Spacer()
                         }
-                        Toggle("Save a thumbnail next to every exported video", isOn: Binding(get: { s.withExport }, set: { v in set { $0.withExport = v } }))
-                        Picker("File type", selection: Binding(get: { s.png }, set: { v in set { $0.png = v } })) {
+                        Toggle("Save it next to the exported video", isOn: Binding(get: { s.withExport }, set: { v in set(made: false) { $0.withExport = v } }))
+                            .help("Clips with a thumbnail made are saved with their export. Clips without one only get a thumbnail when you tick it in the Export window.")
+                        Picker("File type", selection: Binding(get: { s.png }, set: { v in set(made: false) { $0.png = v } })) {
                             Text("JPEG").tag(false); Text("PNG").tag(true)
                         }
+                        Text(clip.thumbnailMade
+                             ? "This clip's thumbnail is made, so it's saved with the clip's video export. Reset This Clip's Thumbnail (under This clip's title) stops that."
+                             : "Not made yet: pick a frame, a title or a look here and it's saved with the clip's export. Until then, exports only include a thumbnail if you tick it in the Export window.")
+                            .font(.caption).foregroundStyle(.secondary)
                         Text("The look starts from the caption style and is shared by every clip in this project; each clip keeps its own picture and title. Presets carry a look to other projects.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -217,6 +229,7 @@ struct ThumbnailSheet: View {
             Spacer()
             Menu("Presets") {
                 Button("Match the Caption Style") {
+                    markMade()
                     model.setThumbnailStyle(ThumbnailStyle.matching(model.project.captionStyle, keeping: s))
                 }
                 Section("Built in") {
@@ -261,6 +274,7 @@ struct ThumbnailSheet: View {
         var n = st
         if n.logoPath == nil { n.logoPath = s.logoPath; n.logoSize = s.logoSize; n.logoCorner = s.logoCorner }
         n.withExport = s.withExport
+        markMade()
         model.setThumbnailStyle(n)
     }
 
