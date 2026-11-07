@@ -53,6 +53,11 @@ enum CompositionBuilder {
         let s = t(a), e = t(b)
         return CMTimeRange(start: s, end: e)
     }
+    /// Seconds -> whole samples on the 48 kHz grid. The edit is laid out in whole samples so every track and
+    /// the picture instructions end at exactly the same point (rounding each piece on its own let the sound run
+    /// a sample or two past the picture, and AVFoundation then refuses the export: "The video could not be composed.").
+    static func g(_ s: Double) -> Int64 { Int64((s * Double(ts)).rounded()) }
+    static func ct(_ v: Int64) -> CMTime { CMTime(value: CMTimeValue(v), timescale: ts) }
 
     /// Builds a playable edit. No rendering happens here: it only describes which pieces of
     /// which files to play, so it's instant and AVPlayer plays the original camera files.
@@ -60,7 +65,6 @@ enum CompositionBuilder {
                       loaded: [LoadedAngle?], format: ClipFormat?, audible: Set<Int>? = nil) throws -> BuiltEdit {
         let comp = AVMutableComposition()
         let pieces = Schedule.pieces(project: p, clip: clip, auto: auto)
-        let total = pieces.last.map { $0.outStart + $0.duration } ?? 0
 
         // video: one composition track per angle
         var vTracks: [Int: AVMutableCompositionTrack] = [:]
@@ -69,16 +73,20 @@ enum CompositionBuilder {
         }
         // which output ranges each angle is visible in
         var visible: [(CMTimeRange, EditPiece)] = []
+        var outCursor: Int64 = 0                        // output position in whole samples
         for piece in pieces {
-            guard let l = loaded[piece.angle], let src = l.video, let track = vTracks[piece.angle] else { continue }
-            let a = p.angles[piece.angle]
-            let s0 = max(0, piece.masterStart + a.offset)
-            let s1 = min(l.duration, piece.masterStart + piece.duration + a.offset)
-            guard s1 > s0 + 0.001 else { continue }
-            let outAt = piece.outStart + (s0 - (piece.masterStart + a.offset))
-            try track.insertTimeRange(range(s0, s1), of: src, at: t(outAt))
-            visible.append((range(piece.outStart, piece.outStart + piece.duration), piece))
+            let mS = g(piece.masterStart), mE = g(piece.masterStart + piece.duration)
+            let oS = outCursor, len = max(0, mE - mS)
+            outCursor += len
+            guard len > 0, let l = loaded[piece.angle], let src = l.video, let track = vTracks[piece.angle] else { continue }
+            let off = g(p.angles[piece.angle].offset)
+            let s0 = max(0, mS + off), s1 = min(g(l.duration), mE + off)
+            guard s1 > s0 + 48 else { continue }        // under a millisecond of picture: leave it black
+            try track.insertTimeRange(CMTimeRange(start: ct(s0), end: ct(s1)), of: src, at: ct(oS + (s0 - (mS + off))))
+            visible.append((CMTimeRange(start: ct(oS), end: ct(oS + len)), piece))
         }
+        let totalS = outCursor
+        let total = Double(totalS) / Double(ts)
 
         // audio: every angle's sound runs the whole clip; the mix decides what you hear
         var aTracks: [Int: AVMutableCompositionTrack] = [:]
@@ -89,16 +97,22 @@ enum CompositionBuilder {
             if let audible, !audible.contains(i) { continue }
             let track = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)!
             aTracks[i] = track
-            let a = p.angles[i]
-            var outPos = 0.0
+            let off = g(p.angles[i].offset), srcEnd = g(l.duration)
+            var outPos: Int64 = 0
             for r in ranges {
-                let s0 = max(0, r.start + a.offset), s1 = min(l.duration, r.end + a.offset)
-                if s1 > s0 + 0.001 {
-                    let at = outPos + (s0 - (r.start + a.offset))
-                    try track.insertTimeRange(range(s0, s1), of: src, at: t(at))
+                let rS = g(r.start), rE = g(r.end)
+                guard rE > rS else { continue }
+                let s0 = max(0, rS + off), s1 = min(srcEnd, rE + off)
+                if s1 > s0 + 48 {
+                    try track.insertTimeRange(CMTimeRange(start: ct(s0), end: ct(s1)), of: src, at: ct(outPos + (s0 - (rS + off))))
                 }
-                outPos += r.duration
+                outPos += rE - rS
             }
+        }
+        // nothing may run past the picture: the instructions end at totalS
+        let endT = ct(totalS)
+        for tr in comp.tracks where totalS > 0 && tr.timeRange.end > endT {
+            tr.removeTimeRange(CMTimeRange(start: endT, end: tr.timeRange.end))
         }
 
         // how the picture is placed in the frame
@@ -132,7 +146,7 @@ enum CompositionBuilder {
             instructions.append(ins)
         }
         // instructions must cover the whole timeline with no gaps
-        instructions = fillGaps(instructions, total: t(total))
+        instructions = fillGaps(instructions, total: endT)
         if framed.values.contains(where: { $0.background != nil }) {
             vc.customVideoCompositorClass = FramingCompositor.self
             vc.instructions = instructions.map { ins in

@@ -439,6 +439,12 @@ enum Entry {
             }
             dispatchMain()
         }
+        if let i = args.firstIndex(of: "--composetest"), i + 1 < args.count {
+            // --composetest <project folder COPY> [tries]: export compositions with nudged edit points must validate
+            let f = URL(fileURLWithPath: args[i + 1]), n = i + 2 < args.count ? Int(args[i + 2]) ?? 20 : 20
+            Task { @MainActor in exit(await ComposeTest.run(folder: f, tries: n)) }
+            dispatchMain()
+        }
         if let i = args.firstIndex(of: "--updatetest") {
             // --updatetest [pretend version]: version comparisons + a live GitHub check
             let pretend = i + 1 < args.count ? args[i + 1] : nil
