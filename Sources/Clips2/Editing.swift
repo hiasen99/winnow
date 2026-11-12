@@ -19,6 +19,14 @@ struct TrimEdge: Equatable {
     var side: TrimSide
 }
 
+/// A block being dragged to a new place in the clip.
+struct BlockMove: Equatable {
+    var segment: Int        // index into Clip.segments
+    var grab: Double        // output seconds from the block's start to where it was grabbed
+    var at: Double          // output time under the mouse now
+    var to: Int             // it would go just before this block (segments.count = at the end); == segment or segment + 1: stays put
+}
+
 struct TrimDrag {
     var edge: TrimEdge
     var original: Clip
@@ -61,6 +69,8 @@ extension ProjectModel {
                 let e = c.outputTime(forMaster: min(w.end, c.end)) ?? o
                 out.append(TLWord(index: i, text: w.text, start: min(s, o), end: max(e, o), hidden: w.isHidden))
             }
+            // blocks moved: in the order they play (snapping searches them by time)
+            if !c.playsInOrder { out = out.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map { $0.element } }
         } else {
             out = project.words.enumerated().map { TLWord(index: $0.offset, text: $0.element.text, start: $0.element.start, end: $0.element.end, hidden: $0.element.isHidden) }
         }
@@ -153,6 +163,70 @@ extension ProjectModel {
         }
     }
 
+    // MARK: - Moving blocks (reordering a clip)
+
+    /// The block picked with a click, if one is.
+    var selectedSegmentIndex: Int? {
+        guard selectedClip != nil, tlSegmentSelected, let sel = tlSel else { return nil }
+        return tlSegments.firstIndex { abs($0.outStart - sel.lowerBound) < 0.001 && abs($0.outEnd - sel.upperBound) < 0.001 }
+    }
+
+    /// Moves block `from` so it plays just before block `to` (`to` = number of blocks: at the end). One undo step.
+    /// The camera, sound, framing and captions of those moments go with it. The moved block stays selected.
+    func moveSegment(_ from: Int, before to: Int) {
+        guard let c = selectedClip, let new = c.movingSegment(from, before: to) else { return }
+        let moved = c.segments[from].master
+        engine.pause()
+        updateClip { $0 = new }
+        guard let n = selectedClip, let k = n.segments.firstIndex(where: { abs($0.master.start - moved.start) < 0.002 }) else { return }
+        let s = n.segments[k]
+        tlSel = s.outStart...s.outEnd
+        tlSegmentSelected = true
+        engine.seek(s.outStart)
+        notice = "Moved the block to \(fmtTime(s.outStart, frac: true)) (block \(k + 1) of \(n.segments.count))."
+        Log.write("block moved: \(from + 1) -> \(k + 1) of \(n.segments.count)")
+    }
+
+    /// ⌥← / ⌥→: the selected block swaps places with the one before / after it.
+    @discardableResult
+    func moveSelectedSegment(by step: Int) -> Bool {
+        guard let k = selectedSegmentIndex else {
+            if selectedClip != nil { notice = "Click a block on the picture track first, then ⌥← / ⌥→ moves it." }
+            return false
+        }
+        let n = tlSegments.count
+        if step < 0 { guard k > 0 else { return true }; moveSegment(k, before: k - 1) }
+        else { guard k + 1 < n else { return true }; moveSegment(k, before: k + 2) }
+        return true
+    }
+
+    func beginBlockMove(_ k: Int, atOutput t: Double) {
+        let segs = tlSegments
+        guard selectedClip != nil, segs.indices.contains(k) else { return }
+        engine.pause(); engine.endSkim()
+        blockMove = BlockMove(segment: k, grab: t - segs[k].outStart, at: t, to: k)
+    }
+
+    /// Where the dragged block would land: in front of the first other block whose middle is past the dragged block's middle.
+    func updateBlockMove(toOutput t: Double) {
+        guard var d = blockMove else { return }
+        let segs = tlSegments
+        guard segs.indices.contains(d.segment) else { blockMove = nil; return }
+        let dur = segs[d.segment].master.duration
+        let centre = t - d.grab + dur / 2
+        let others = segs.indices.filter { $0 != d.segment }
+        let j = others.filter { (segs[$0].outStart + segs[$0].outEnd) / 2 < centre }.count
+        d.to = j < others.count ? others[j] : segs.count
+        d.at = t
+        if d != blockMove { blockMove = d }
+    }
+
+    func endBlockMove() {
+        guard let d = blockMove else { return }
+        blockMove = nil
+        if d.to != d.segment && d.to != d.segment + 1 { moveSegment(d.segment, before: d.to) }
+    }
+
     /// Removes the blade split at an edit point (output time), joining the two blocks again.
     func joinSplit(atOutput t: Double) {
         guard let c = selectedClip else { return }
@@ -164,8 +238,10 @@ extension ProjectModel {
     func closeGap(afterRange i: Int) {
         guard let c = selectedClip, i + 1 < c.ranges.count else { return }
         let a = c.ranges[i].end, b = c.ranges[i + 1].start
+        let cut = c.join(after: i).cut
+        guard b > a, cut > 0.001 else { return }
         updateClip { $0.restore(a, b) }
-        notice = String(format: "Put back %.1f s.", b - a)
+        notice = String(format: "Put back %.1f s.", cut)
     }
 
     // MARK: - Trimming edges with the mouse
@@ -184,7 +260,8 @@ extension ProjectModel {
                 let v = max(seg.master.start + 0.1, min(m, seg.master.end))
                 if v < seg.master.end - 0.001 { c.cut(v, seg.master.end) }
             } else {
-                let hi = i + 1 < c.ranges.count ? c.ranges[i + 1].start : maxT
+                // up to the next kept moment in the recording (in play order that's the next block, unless blocks were moved)
+                let hi = c.ranges.indices.filter { $0 != i && c.ranges[$0].start >= c.ranges[i].end - 1e-6 }.map { c.ranges[$0].start }.min() ?? maxT
                 c.ranges[i].end = max(seg.master.start + 0.1, min(m, hi))
                 c.normalizeRanges()
             }
@@ -193,7 +270,7 @@ extension ProjectModel {
                 let v = min(seg.master.end - 0.1, max(m, seg.master.start))
                 if v > seg.master.start + 0.001 { c.cut(seg.master.start, v) }
             } else {
-                let lo = i > 0 ? c.ranges[i - 1].end : 0
+                let lo = c.ranges.indices.filter { $0 != i && c.ranges[$0].end <= c.ranges[i].start + 1e-6 }.map { c.ranges[$0].end }.max() ?? 0
                 c.ranges[i].start = min(seg.master.end - 0.1, max(m, lo))
                 c.normalizeRanges()
             }
@@ -240,16 +317,29 @@ extension ProjectModel {
     /// ⌥[ / ⌥] : the clip starts / ends at the playhead.
     func trimStartToPlayhead() {
         guard let c = selectedClip else { return }
-        let m = c.masterTime(forOutput: engine.time)
-        guard m > c.start + 0.02, m < c.end - 0.2 else { return }
-        updateClip { $0.cut($0.start, m) }
+        let t = engine.time
+        if c.playsInOrder {
+            let m = c.masterTime(forOutput: t)
+            guard m > c.start + 0.02, m < c.end - 0.2 else { return }
+            updateClip { $0.cut($0.start, m) }
+        } else {
+            // blocks moved: everything that plays before the playhead goes
+            guard t > 0.02, t < c.outputDuration - 0.2 else { return }
+            updateClip { $0.cutOutput(0, t) }
+        }
         engine.seek(0)
     }
     func trimEndToPlayhead() {
         guard let c = selectedClip else { return }
-        let m = c.masterTime(forOutput: engine.time)
-        guard m < c.end - 0.02, m > c.start + 0.2 else { return }
-        updateClip { $0.cut(m, $0.end) }
+        let t = engine.time
+        if c.playsInOrder {
+            let m = c.masterTime(forOutput: t)
+            guard m < c.end - 0.02, m > c.start + 0.2 else { return }
+            updateClip { $0.cut(m, $0.end) }
+        } else {
+            guard t > 0.2, t < c.outputDuration - 0.02 else { return }
+            updateClip { $0.cutOutput(t, $0.outputDuration) }
+        }
     }
 
     // MARK: - Range (I / O)

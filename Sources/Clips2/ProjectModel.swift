@@ -43,6 +43,8 @@ final class ProjectModel: ObservableObject {
     @Published var editingWords: ClosedRange<Int>? = nil
     /// a timeline edge being dragged
     @Published var trimDrag: TrimDrag? = nil
+    /// a block being dragged to a new place in the clip
+    @Published var blockMove: BlockMove? = nil
     @Published var snapping: Bool = UserDefaults.standard.object(forKey: "tlSnapping") as? Bool ?? true {
         didSet { UserDefaults.standard.set(snapping, forKey: "tlSnapping") }
     }
@@ -75,6 +77,14 @@ final class ProjectModel: ObservableObject {
     @Published var frameScope: FrameScope = .camera
     /// The "Adjust framing" pop-over (also opened from the timeline's right-click menu).
     @Published var showFraming = false
+    /// Follow a point: drawing the box in the viewer, and the tracking that's running now.
+    @Published var followPicking = false
+    @Published var followJob: FollowJob? = nil
+    @Published var followProgress: Double = 0
+    /// A new follow covers every shot of that camera in the clip (else just the shot at the playhead).
+    @Published var followWholeClip = UserDefaults.standard.bool(forKey: "followWholeClip") {
+        didSet { UserDefaults.standard.set(followWholeClip, forKey: "followWholeClip") }
+    }
     /// The thumbnail editor (in place of the captions panel).
     @Published var showThumbnail = false
     /// The follow popup picked on the timeline or in the viewer (its settings show on the right).
@@ -87,7 +97,7 @@ final class ProjectModel: ObservableObject {
     var viewers = 0 { didSet { engine.player.isMuted = viewers <= 0 } }
 
     let engine = PlayerEngine()
-    private var undoStack: [Project] = []
+    private(set) var undoStack: [Project] = []
     private var redoStack: [Project] = []
     private var saveTask: Task<Void, Never>?
     private(set) var envelopes: [[Float]?] = []
@@ -847,6 +857,7 @@ final class ProjectModel: ObservableObject {
     func seekMaster(_ m: Double) {
         if let c = selectedClip {
             if let o = c.outputTime(forMaster: m) { engine.seek(o) }
+            else if !c.playsInOrder { engine.seek(min(c.outputTimeClamped(forMaster: m), engine.duration)) }
             else if m < c.start { engine.seek(0) } else if m > c.end { engine.seek(engine.duration) }
             else {
                 // inside a removed part: jump to the next kept moment
@@ -862,7 +873,7 @@ final class ProjectModel: ObservableObject {
         selection = nil
         editingWords = nil
         selectedCaption = nil; editingCaption = nil; captionDrag = nil
-        selectedPopup = nil; popupDrag = nil
+        selectedPopup = nil; popupDrag = nil; blockMove = nil
         tlZoom = 1; tlStart = 0; tlSel = nil
         if let c = selectedClip {
             rebuild(at: (m >= c.start && m <= c.end) ? (c.outputTime(forMaster: m) ?? 0) : 0, play: false)
@@ -1046,30 +1057,14 @@ final class ProjectModel: ObservableObject {
         guard let c = selectedClip else { return }
         let (s, _) = snapRange(i, i)
         guard s < c.end - 0.3 else { return }
-        updateClip { clip in
-            clip.ranges = clip.ranges.compactMap { r in
-                if r.end <= s { return nil }
-                return TimeRange(start: max(r.start, s), end: r.end)
-            }
-            if s < clip.start || clip.ranges.isEmpty {
-                clip.ranges.insert(TimeRange(start: s, end: clip.ranges.first?.start ?? c.end), at: 0)
-            }
-        }
+        updateClip { $0.setRecordingStart(s) }
     }
 
     func setEnd(toWord i: Int) {
         guard let c = selectedClip else { return }
         let (_, e) = snapRange(i, i)
         guard e > c.start + 0.3 else { return }
-        updateClip { clip in
-            clip.ranges = clip.ranges.compactMap { r in
-                if r.start >= e { return nil }
-                return TimeRange(start: r.start, end: min(r.end, e))
-            }
-            if e > clip.end || clip.ranges.isEmpty {
-                clip.ranges.append(TimeRange(start: clip.ranges.last?.end ?? c.start, end: e))
-            }
-        }
+        updateClip { $0.setRecordingEnd(e) }
     }
 
     func nudge(start delta: Double) {
@@ -1098,6 +1093,14 @@ final class ProjectModel: ObservableObject {
             // so covering them keeps it to a single change in and a single change out
             let segs = masterSegments(c, sel.lowerBound, sel.upperBound)
             guard let a = segs.first?.0, let b = segs.last?.1 else { return nil }
+            if !c.playsInOrder {
+                // blocks moved: each piece that plays in the selection on its own (pieces that carry straight on join up)
+                var out: [(Double, Double)] = []
+                for s in segs {
+                    if let last = out.last, abs(last.1 - s.0) < 0.002 { out[out.count - 1].1 = s.1 } else { out.append(s) }
+                }
+                return out
+            }
             return [(a, b)]
         }
         let ws = project.words

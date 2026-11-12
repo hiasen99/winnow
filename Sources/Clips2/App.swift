@@ -216,6 +216,8 @@ struct Clips2App: App {
                 Button("Blade at Playhead") { app.active?.bladeAtPlayhead() }.keyboardShortcut("b", modifiers: .command)
                 Button("Trim Start to Playhead") { app.active?.trimStartToPlayhead() }.keyboardShortcut("[", modifiers: .option)
                 Button("Trim End to Playhead") { app.active?.trimEndToPlayhead() }.keyboardShortcut("]", modifiers: .option)
+                Button("Move Selected Block Earlier  (⌥←)") { app.active?.moveSelectedSegment(by: -1) }
+                Button("Move Selected Block Later  (⌥→)") { app.active?.moveSelectedSegment(by: 1) }
                 Button("Add Marker") { app.active?.addMarker() }
                 Button("Next Edit Point") { app.active?.jumpEditPoint(next: true) }
                 Button("Previous Edit Point") { app.active?.jumpEditPoint(next: false) }
@@ -443,6 +445,14 @@ enum Entry {
             // --composetest <project folder COPY> [tries]: export compositions with nudged edit points must validate
             let f = URL(fileURLWithPath: args[i + 1]), n = i + 2 < args.count ? Int(args[i + 2]) ?? 20 : 20
             Task { @MainActor in exit(await ComposeTest.run(folder: f, tries: n)) }
+            dispatchMain()
+        }
+        if let i = args.firstIndex(of: "--followtest"), i + 7 < args.count {
+            // --followtest <video> <t0> <t1> <x> <y> <w> <h> [lockSize]: track a box, print the track and how still the framing keeps it
+            let v = Array(args[(i + 1)...])
+            Task { @MainActor in exit(await FollowTest.run(video: URL(fileURLWithPath: v[0]), t0: Double(v[1]) ?? 0, t1: Double(v[2]) ?? 5,
+                                                          box: CGRect(x: Double(v[3]) ?? 0.45, y: Double(v[4]) ?? 0.45, width: Double(v[5]) ?? 0.1, height: Double(v[6]) ?? 0.1),
+                                                          lockSize: v.count > 7 && v[7] == "lock")) }
             dispatchMain()
         }
         if let i = args.firstIndex(of: "--updatetest") {

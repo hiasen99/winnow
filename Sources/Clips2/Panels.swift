@@ -105,6 +105,7 @@ struct FramingPopover: View {
                             .help("Show the area social apps leave clear of their buttons and captions")
                     }
                     Divider()
+                    FollowBox(model: model, engine: engine)
                     Picker("", selection: $model.frameScope) {
                         Text("Every shot").tag(ProjectModel.FrameScope.camera)
                         Text("This shot only").tag(ProjectModel.FrameScope.shot)

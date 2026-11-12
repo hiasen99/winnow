@@ -29,6 +29,9 @@ struct ProjectView: View {
                 ZStack {
                     Color.black
                     PlayerView(engine: model.engine, guides: model.showGuides && model.selectedClip?.format == .vertical, model: model)
+                    FollowMarkerOverlay(model: model, engine: model.engine)
+                    if model.followPicking && model.selectedClip != nil { FollowPickOverlay(model: model, engine: model.engine) }
+                    FollowProgressBadge(model: model)
                     // the thumbnail editor shows its preview here, in place of the video
                     if model.showThumbnail && model.selectedClip != nil { ThumbnailPreview(model: model) }
                     if let b = model.busy { BusyOverlay(text: b, progress: model.progress) }
@@ -652,6 +655,9 @@ func handleKey(_ model: ProjectModel, _ e: NSEvent) -> Bool {
     if mods == [.option] {
         if e.keyCode == 33 || chars0 == "[" || chars0 == "“" { model.trimStartToPlayhead(); return true }
         if e.keyCode == 30 || chars0 == "]" || chars0 == "‘" { model.trimEndToPlayhead(); return true }
+        // ⌥← / ⌥→ : move the selected block earlier / later in the clip
+        if e.keyCode == 123, model.selectedSegmentIndex != nil { return model.moveSelectedSegment(by: -1) }
+        if e.keyCode == 124, model.selectedSegmentIndex != nil { return model.moveSelectedSegment(by: 1) }
         return false
     }
     if !mods.isEmpty { return false }
@@ -665,6 +671,7 @@ func handleKey(_ model: ProjectModel, _ e: NSEvent) -> Bool {
         if model.selectedClip != nil, model.selection != nil { model.cutSelection(); return true }
         return false
     case 53:                                                                       // escape
+        if model.followPicking { model.followPicking = false; return true }
         if model.editingWords != nil { model.editingWords = nil; return true }
         if model.selectedPopup != nil { model.selectPopup(nil); return true }
         if model.selectedCaption != nil { model.selectedCaption = nil; return true }

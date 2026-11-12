@@ -27,7 +27,9 @@ enum MCPServer {
         and a misheard name everywhere with text.replace. caption.style changes the look for the whole project (font family, weight — any installed style, or any thickness on a variable font — colours, animation, layout).
         camera.set and sound.set take from/to (recording seconds) to change exactly one stretch. clip_inspect lists the clip's shots \
         (one camera between cuts); framing.set with shot: <seconds inside it> frames that one shot on its own (when someone moves). \
-        framing.set zoom below 1 (or zoom: "fit") zooms out: the picture gets smaller than the frame with a blurred copy of the camera behind it.
+        framing.set zoom below 1 (or zoom: "fit") zooms out: the picture gets smaller than the frame with a blurred copy of the camera behind it. \
+        framing.follow picks something in the picture (time + frameX/frameY where render_frame shows it) and tracks it: the framing then moves so it stays put \
+        when the camera drifts, pans or zooms (lockSize for zooms). clip_inspect 'follows' shows where it was lost or ran off the picture; pick again there.
         render_frame shows a frame exactly as it will export, so check your changes with it. \
         Pictures: frame.save saves one frame as a PNG/JPEG (a clip's frame as it exports, or the full recording's camera frame); \
         frame.grab marks frames (like pressing G) and frame.saveGrabs saves them all. Each clip has a thumbnail: thumbnail.set picks its frame and title, \

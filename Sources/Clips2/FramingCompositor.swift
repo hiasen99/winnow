@@ -18,15 +18,32 @@ final class FramedInstruction: NSObject, AVVideoCompositionInstructionProtocol {
     /// the picture scaled to fill the frame, for the blurred background; nil = black behind
     let background: CGAffineTransform?
     let renderSize: CGSize
+    /// A followed shot: the transform changes over time (composition seconds → transform), in between it's blended.
+    let motion: [(t: Double, tf: CGAffineTransform)]
 
     init(timeRange: CMTimeRange, trackID: CMPersistentTrackID, transform: CGAffineTransform,
-         background: CGAffineTransform?, renderSize: CGSize) {
+         background: CGAffineTransform?, renderSize: CGSize, motion: [(t: Double, tf: CGAffineTransform)] = []) {
         self.timeRange = timeRange
         self.trackID = trackID
         self.transform = transform
         self.background = background
         self.renderSize = renderSize
+        self.motion = motion
         self.requiredSourceTrackIDs = trackID == kCMPersistentTrackID_Invalid ? [] : [NSNumber(value: trackID)]
+    }
+
+    /// The transform at composition time `t` (fixed unless the shot follows a point).
+    func transform(at t: Double) -> CGAffineTransform {
+        guard motion.count > 1, t.isFinite else { return motion.first?.tf ?? transform }
+        if t <= motion[0].t { return motion[0].tf }
+        let n = motion.count
+        if t >= motion[n - 1].t { return motion[n - 1].tf }
+        var lo = 0, hi = n - 1
+        while hi - lo > 1 { let m = (lo + hi) / 2; if motion[m].t <= t { lo = m } else { hi = m } }
+        let a = motion[lo].tf, b = motion[hi].tf
+        let u = CGFloat((t - motion[lo].t) / max(1e-9, motion[hi].t - motion[lo].t))
+        return CGAffineTransform(a: a.a + (b.a - a.a) * u, b: a.b + (b.b - a.b) * u, c: a.c + (b.c - a.c) * u,
+                                 d: a.d + (b.d - a.d) * u, tx: a.tx + (b.tx - a.tx) * u, ty: a.ty + (b.ty - a.ty) * u)
     }
 
     static func black(_ r: CMTimeRange, renderSize: CGSize) -> FramedInstruction {
@@ -34,7 +51,8 @@ final class FramedInstruction: NSObject, AVVideoCompositionInstructionProtocol {
     }
 }
 
-/// Draws each frame with Core Image: used only when some shot is zoomed out (the built-in compositor can't blur).
+/// Draws each frame with Core Image: used only when some shot is zoomed out (the built-in compositor can't blur)
+/// or follows a point (the framing moves every frame).
 /// The same path runs in the viewer, the export and render_frame.
 final class FramingCompositor: NSObject, AVVideoCompositing {
     /// How soft the background is: blur radius as a fraction of the frame's long side.
@@ -102,7 +120,8 @@ final class FramingCompositor: NSObject, AVVideoCompositing {
                     .cropped(to: bounds)
                 image = back.composited(over: image)
             }
-            let front = picture.transformed(by: ciTransform(ins.transform.concatenating(k), raw: raw, renderHeight: size.height))
+            let tf = ins.transform(at: request.compositionTime.seconds)
+            let front = picture.transformed(by: ciTransform(tf.concatenating(k), raw: raw, renderHeight: size.height))
             image = front.composited(over: image).cropped(to: bounds)
             CVBufferPropagateAttachments(src, out)
         }

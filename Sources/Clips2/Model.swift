@@ -10,6 +10,14 @@ struct TimeRange: Codable, Hashable {
     var end: Double
     var duration: Double { max(0, end - start) }
     func contains(_ t: Double) -> Bool { t >= start && t < end }
+    /// This range with `o` taken out (0, 1 or 2 pieces).
+    func minus(_ o: TimeRange) -> [TimeRange] {
+        if o.end <= start || o.start >= end { return [self] }
+        var out: [TimeRange] = []
+        if o.start > start { out.append(TimeRange(start: start, end: o.start)) }
+        if o.end < end { out.append(TimeRange(start: o.end, end: end)) }
+        return out
+    }
 }
 
 struct RGBA: Codable, Hashable {
@@ -198,7 +206,8 @@ struct ClipSegment: Hashable {
 struct Clip: Codable, Identifiable, Hashable {
     var id: UUID = UUID()
     var title: String
-    /// Kept pieces in master time, sorted, non-overlapping. Removing words splits a range.
+    /// Kept pieces in master time, in the order they play, never overlapping. Usually that's recording order;
+    /// blocks moved on the timeline play out of it (see `playsInOrder`). Removing words splits a range.
     var ranges: [TimeRange]
     var switches: [AngleSwitch] = []
     var audio: AudioMix
@@ -224,10 +233,136 @@ struct Clip: Codable, Identifiable, Hashable {
     var thumbnail: ClipThumbnail? = nil
     /// Follow / subscribe popups shown over the picture. (optional so older projects still load)
     var popups: [FollowPopup]? = nil
+    /// Framing that follows a point picked in the picture (Follow… in the framing pop-over). (optional so older projects still load)
+    var follows: [FollowTrack]? = nil
 
-    var start: Double { ranges.first?.start ?? 0 }
-    var end: Double { ranges.last?.end ?? 0 }
+    /// Earliest / latest kept moment in the recording (with blocks moved, not necessarily where it starts / ends playing).
+    var start: Double { ranges.lazy.map { $0.start }.min() ?? 0 }
+    var end: Double { ranges.lazy.map { $0.end }.max() ?? 0 }
     var outputDuration: Double { ranges.reduce(0) { $0 + $1.duration } }
+
+    /// true unless blocks were moved so the clip plays parts of the recording out of order.
+    var playsInOrder: Bool { zip(ranges, ranges.dropFirst()).allSatisfy { $0.start < $1.start } }
+
+    /// Where kept range `i` meets the next one: seconds of the recording cut out there (not used anywhere else in the clip),
+    /// and whether the next range was moved there (it doesn't simply carry on later in the recording).
+    func join(after i: Int) -> (cut: Double, moved: Bool) {
+        guard i >= 0, i + 1 < ranges.count else { return (0, false) }
+        let a = ranges[i].end, b = ranges[i + 1].start
+        if b < a - 0.001 { return (0, true) }
+        var gap = [TimeRange(start: a, end: b)]
+        for (k, r) in ranges.enumerated() where k != i && k != i + 1 { gap = gap.flatMap { $0.minus(r) } }
+        let cut = gap.reduce(0) { $0 + $1.duration }
+        return (cut, cut < (b - a) - 0.001)
+    }
+
+    /// The clip with block `from` (index into `segments`) moved so it plays just before block `to`
+    /// (`to` == segments.count: at the end). Its camera, sound, framing and captions go with it, since they belong to
+    /// those moments of the recording. nil when nothing would change.
+    func movingSegment(_ from: Int, before to: Int) -> Clip? {
+        let segs = segments
+        guard segs.indices.contains(from), to >= 0, to <= segs.count, to != from, to != from + 1 else { return nil }
+        var blocks = segs.map { $0.master }
+        let moved = blocks.remove(at: from)
+        blocks.insert(moved, at: to > from ? to - 1 : to)
+        var c = self
+        c.ranges = blocks
+        // every block stays a block: blade points at the moved block's edges (kept only where the pieces join up again)
+        c.splits = Array(Set((splits ?? []) + [moved.start, moved.end])).sorted()
+        // a hand-edited caption running across a place where the clip now jumps is split there, so each part shows with its own words
+        var at = [moved.start, moved.end]
+        if to < segs.count { at.append(segs[to].master.start) }
+        if to > 0 { at.append(segs[to - 1].master.end) }
+        if var cb = c.captionBlocks {
+            for p in at { cb = cb.flatMap { $0.split(at: p) } }
+            c.captionBlocks = cb.sorted { $0.start < $1.start }
+        }
+        c.normalizeRanges()
+        return c
+    }
+
+    /// Which kept range plays at output time `o` (the last one at its very end).
+    func rangeIndex(atOutput o: Double) -> Int {
+        var acc = 0.0
+        for (i, r) in ranges.enumerated() {
+            if o < acc + r.duration { return i }
+            acc += r.duration
+        }
+        return max(0, ranges.count - 1)
+    }
+    /// Output time where the kept range playing at `o` ends.
+    func outputRangeEnd(containing o: Double) -> Double {
+        let k = rangeIndex(atOutput: o)
+        return ranges.prefix(k + 1).reduce(0) { $0 + $1.duration }
+    }
+
+    /// Where master [a, b) shows in the clip's output: the longest stretch of it that plays without a jump
+    /// (with the clip in recording order that's all of it, cuts closed up). nil = all of it was cut out.
+    func outputSpan(fromMaster a: Double, to b: Double) -> (start: Double, end: Double)? {
+        var acc = 0.0
+        var parts: [(Double, Double)] = []
+        for r in ranges {
+            let x = max(a, r.start), y = min(b, r.end)
+            if y > x { parts.append((acc + x - r.start, acc + y - r.start)) }
+            acc += r.duration
+        }
+        parts.sort { $0.0 < $1.0 }
+        var merged: [(Double, Double)] = []
+        for p in parts {
+            if let last = merged.last, p.0 <= last.1 + 0.002 { merged[merged.count - 1].1 = max(last.1, p.1) } else { merged.append(p) }
+        }
+        return merged.max(by: { $0.1 - $0.0 < $1.1 - $1.0 }).map { (start: $0.0, end: $0.1) }
+    }
+
+    /// Remove output time [o1, o2) (whatever plays then) from the clip.
+    mutating func cutOutput(_ o1: Double, _ o2: Double) {
+        var acc = 0.0
+        var parts: [(Double, Double)] = []
+        for r in ranges {
+            let a = max(o1, acc), b = min(o2, acc + r.duration)
+            if b > a + 0.001 { parts.append((r.start + a - acc, r.start + b - acc)) }
+            acc += r.duration
+        }
+        for (a, b) in parts { cut(a, b) }
+    }
+
+    /// The clip begins at `s` in the recording: earlier moments go, or the earliest kept piece reaches back to `s`.
+    mutating func setRecordingStart(_ s: Double) {
+        let old = start, oldEnd = end
+        ranges = ranges.compactMap { r in r.end <= s ? nil : TimeRange(start: max(r.start, s), end: r.end) }
+        if ranges.isEmpty { ranges = [TimeRange(start: s, end: max(s + 0.3, oldEnd))] }
+        else if s < old, let k = ranges.indices.min(by: { ranges[$0].start < ranges[$1].start }) { ranges[k].start = s }
+        normalizeRanges()
+    }
+    /// The clip ends at `e` in the recording: later moments go, or the latest kept piece reaches on to `e`.
+    mutating func setRecordingEnd(_ e: Double) {
+        let old = end, oldStart = start
+        ranges = ranges.compactMap { r in r.start >= e ? nil : TimeRange(start: r.start, end: min(r.end, e)) }
+        if ranges.isEmpty { ranges = [TimeRange(start: min(oldStart, e - 0.3), end: e)] }
+        else if e > old, let k = ranges.indices.max(by: { ranges[$0].end < ranges[$1].end }) { ranges[k].end = e }
+        normalizeRanges()
+    }
+
+    /// Stretches of constant sound in OUTPUT time, in play order.
+    func soundOutputSegments() -> [(start: Double, end: Double, on: [Bool])] {
+        let segs = soundSegments()
+        if playsInOrder {
+            return segs.map { (outputTimeClamped(forMaster: $0.start), outputTimeClamped(forMaster: $0.end), $0.on) }
+        }
+        var out: [(start: Double, end: Double, on: [Bool])] = []
+        var acc = 0.0
+        for r in ranges {
+            for s in segs where s.end > r.start && s.start < r.end {
+                let a = max(s.start, r.start), b = min(s.end, r.end)
+                guard b > a else { continue }
+                let oa = acc + a - r.start, ob = acc + b - r.start
+                if let last = out.last, last.on == s.on, abs(last.end - oa) < 1e-6 { out[out.count - 1].end = ob }
+                else { out.append((oa, ob, s.on)) }
+            }
+            acc += r.duration
+        }
+        return out.isEmpty ? [(0, acc, audio.on)] : out
+    }
 
     /// The blocks shown on the timeline (kept ranges, divided at blade points).
     var segments: [ClipSegment] {
@@ -327,15 +462,17 @@ struct Clip: Codable, Identifiable, Hashable {
         return out.map { (start: $0.0, end: $0.1, on: $0.2) }
     }
 
-    /// master -> output time; a moment inside a removed part maps to where playback resumes.
+    /// master -> output time; a moment inside a removed part maps to where playback resumes
+    /// (the start of the kept piece that comes next in the recording).
     func outputTimeClamped(forMaster t: Double) -> Double {
         if let o = outputTime(forMaster: t) { return o }
         var acc = 0.0
+        var best: (start: Double, out: Double)? = nil
         for r in ranges {
-            if r.start >= t { return acc }
+            if r.start >= t, best == nil || r.start < best!.start { best = (r.start, acc) }
             acc += r.duration
         }
-        return acc
+        return best?.out ?? acc
     }
 
     /// master time -> clip output time (nil if the moment was cut out)
@@ -358,12 +495,27 @@ struct Clip: Codable, Identifiable, Hashable {
     }
 
     mutating func normalizeRanges() {
-        let sorted = ranges.filter { $0.duration > 0.02 }.sorted { $0.start < $1.start }
+        let kept = ranges.filter { $0.duration > 0.02 }
         var out: [TimeRange] = []
-        for r in sorted {
-            if var last = out.last, r.start <= last.end + 0.001 {
-                last.end = max(last.end, r.end); out[out.count - 1] = last
-            } else { out.append(r) }
+        if zip(kept, kept.dropFirst()).allSatisfy({ $0.start <= $1.start }) {
+            // recording order: sort, join what touches or overlaps
+            for r in kept {
+                if var last = out.last, r.start <= last.end + 0.001 {
+                    last.end = max(last.end, r.end); out[out.count - 1] = last
+                } else { out.append(r) }
+            }
+        } else {
+            // blocks were moved: keep the play order, never play a moment twice (the earlier piece keeps it),
+            // and join a piece to the one before it when it simply carries on
+            for r0 in kept {
+                var parts = [r0]
+                for o in out { parts = parts.flatMap { $0.minus(o) } }
+                for r in parts where r.duration > 0.02 {
+                    if var last = out.last, abs(r.start - last.end) <= 0.001 {
+                        last.end = r.end; out[out.count - 1] = last
+                    } else { out.append(r) }
+                }
+            }
         }
         ranges = out
         switches.sort { $0.time < $1.time }
@@ -388,7 +540,21 @@ struct Clip: Codable, Identifiable, Hashable {
 
     /// Put [a, b) back (only within the clip's outer bounds unless extend == true).
     mutating func restore(_ a: Double, _ b: Double) {
-        ranges.append(TimeRange(start: a, end: b))
+        guard !playsInOrder else {
+            ranges.append(TimeRange(start: a, end: b))
+            normalizeRanges()
+            return
+        }
+        // blocks were moved: each missing piece goes back next to the kept piece it touches in the recording
+        var gaps = [TimeRange(start: a, end: b)]
+        for r in ranges { gaps = gaps.flatMap { $0.minus(r) } }
+        for g in gaps where g.duration > 0.001 {
+            if let i = ranges.firstIndex(where: { abs($0.end - g.start) < 0.002 }) { ranges[i].end = g.end }
+            else if let j = ranges.firstIndex(where: { abs($0.start - g.end) < 0.002 }) { ranges[j].start = g.start }
+            else if let p = ranges.indices.filter({ ranges[$0].end <= g.start }).max(by: { ranges[$0].end < ranges[$1].end }) {
+                ranges.insert(g, at: p + 1)
+            } else { ranges.insert(g, at: 0) }
+        }
         normalizeRanges()
     }
 }
@@ -478,6 +644,20 @@ struct CaptionBlock: Codable, Hashable, Identifiable {
     /// The stretch of the transcript this caption was made from: those words stay with it even after it's moved.
     var covers: TimeRange? = nil
     var text: String { words.map { $0.text }.joined(separator: " ") }
+    /// Two captions, before and after master time `p` (itself when it doesn't run across `p`).
+    func split(at p: Double) -> [CaptionBlock] {
+        guard start < p - 0.01, end > p + 0.01 else { return [self] }
+        var a = self, b = self
+        b.id = UUID()
+        a.end = p; b.start = p
+        a.words = words.filter { ($0.start + $0.end) / 2 < p }
+        b.words = words.filter { ($0.start + $0.end) / 2 >= p }
+        if let c = covers {
+            a.covers = c.start < p ? TimeRange(start: c.start, end: min(c.end, p)) : nil
+            b.covers = c.end > p ? TimeRange(start: max(c.start, p), end: c.end) : nil
+        }
+        return [a, b]
+    }
     func owns(_ w: Word) -> Bool {
         let mid = (w.start + w.end) / 2
         if mid >= start && mid < end { return true }

@@ -76,7 +76,8 @@ struct TimelinePanel: View {
     @State private var scrollGrab: Double = 0
     @State private var capPending: (id: UUID, mode: CaptionDrag.Mode, t: Double)? = nil
     @State private var popPending: (id: UUID, mode: CaptionDrag.Mode, t: Double)? = nil
-    enum DragMode { case none, scrub, select, trim, scroll, capPending, capDrag, popPending, popDrag }
+    @State private var movePending: (segment: Int, t: Double)? = nil
+    enum DragMode { case none, scrub, select, trim, scroll, capPending, capDrag, popPending, popDrag, movePending, moveBlock }
 
     var engine: PlayerEngine { model.engine }
 
@@ -156,6 +157,14 @@ struct TimelinePanel: View {
         return best?.0
     }
 
+    /// The selected block under the mouse (away from its edges): it can be dragged to a new place.
+    func selectedBlock(at p: CGPoint, _ L: TLLayout) -> Int? {
+        guard L.zone(p.y) == .video, let k = model.selectedSegmentIndex else { return nil }
+        let s = model.tlSegments[k]
+        let xa = L.x(s.outStart), xb = L.x(s.outEnd)
+        return p.x > xa && p.x < xb ? k : nil
+    }
+
     func marker(at p: CGPoint, _ L: TLLayout) -> Marker? {
         guard p.y < TLLayout.rulerH + 2 || L.zone(p.y) == .video else { return nil }
         return model.markersOnTimeline().first { abs(L.x($0.1) - p.x) <= 5 }?.0
@@ -227,7 +236,9 @@ struct TimelinePanel: View {
     }
 
     func cursor(_ p: CGPoint, _ L: TLLayout) -> NSCursor {
+        if dragMode == .moveBlock { return .closedHand }
         if dragMode == .trim || edge(at: p, L) != nil { return .resizeLeftRight }
+        if selectedBlock(at: p, L) != nil { return .openHand }
         if dragMode == .capDrag, let d = model.captionDrag { return d.mode == .move ? .closedHand : .resizeLeftRight }
         if dragMode == .popDrag, let d = model.popupDrag { return d.mode == .move ? .closedHand : .resizeLeftRight }
         if let h = popupHit(at: p, L) { return h.mode == .move ? .openHand : .resizeLeftRight }
@@ -305,6 +316,12 @@ struct TimelinePanel: View {
             model.beginTrim(ed, x: p.x, secondsPerPixel: L.spp)
             return
         }
+        // the selected block: drag it to a new place in the clip (a click without dragging works as before)
+        if !e.modifierFlags.contains(.shift), let k = selectedBlock(at: p, L) {
+            movePending = (k, t)
+            dragMode = .movePending
+            return
+        }
         if zone == .words, e.clickCount == 2, let w = word(at: p, L) {
             model.selection = w.index...w.index
             model.beginEditingText()
@@ -349,6 +366,15 @@ struct TimelinePanel: View {
         case .popDrag:
             model.updatePopupDrag(toOutput: t, spp: L.spp)
             autoScroll(p.x, L)
+        case .movePending:
+            if abs(p.x - dragStartX) > 3, let mp = movePending {
+                model.beginBlockMove(mp.segment, atOutput: mp.t)
+                dragMode = .moveBlock
+                model.updateBlockMove(toOutput: L.t(p.x))
+            }
+        case .moveBlock:
+            model.updateBlockMove(toOutput: L.t(p.x))
+            autoScroll(p.x, L)
         case .none: break
         }
     }
@@ -378,10 +404,17 @@ struct TimelinePanel: View {
             // a click on a popup: pick it and show it in the viewer
             if let c = popPending { model.selectPopup(c.id, show: true) }
         case .popDrag: model.endPopupDrag()
+        case .movePending:
+            // just a click on the selected block: same as clicking any block
+            model.tlSel = nil
+            engine.seek(t)
+            model.selectSegment(atOutput: t)
+        case .moveBlock: model.endBlockMove()
         case .scroll, .none: break
         }
         capPending = nil
         popPending = nil
+        movePending = nil
         dragMode = .none
     }
 
@@ -493,6 +526,19 @@ struct TimelinePanel: View {
                 if model.shotHasOwnFraming(pc) {
                     m.add("Use Camera \(cam)'s Framing for This Shot") { model.removeShotFraming(pc) }
                 }
+                if let tr = model.follow(for: pc) {
+                    m.add("Pick the Followed Point Again Here…") {
+                        engine.seek(min(max(t, pc.outStart + 0.001), pc.outStart + pc.duration - 0.001))
+                        model.startFollowPick()
+                    }
+                    m.add("Stop Following in This Shot") { model.removeFollow(tr.id) }
+                } else {
+                    m.add("Follow a Point in This \(cam) Shot…") {
+                        engine.seek(min(max(t, pc.outStart + 0.001), pc.outStart + pc.duration - 0.001))
+                        model.followWholeClip = false
+                        model.startFollowPick()
+                    }
+                }
                 m.addSeparator()
             }
             if let c = model.selectedClip, let k = model.segmentIndex(atOutput: t) {
@@ -500,6 +546,12 @@ struct TimelinePanel: View {
                 let s = segs[k]
                 m.add("Delete This Block") { model.selectSegment(atOutput: t); model.cutTimelineSelection() }
                 m.add("Blade at Playhead") { model.bladeAtPlayhead() }
+                if segs.count > 1 {
+                    if k > 0 { m.add("Move Block Earlier  (⌥←)") { model.moveSegment(k, before: k - 1) } }
+                    if k + 1 < segs.count { m.add("Move Block Later  (⌥→)") { model.moveSegment(k, before: k + 2) } }
+                    if k > 1 { m.add("Move Block to the Start") { model.moveSegment(k, before: 0) } }
+                    if k + 2 < segs.count { m.add("Move Block to the End") { model.moveSegment(k, before: segs.count) } }
+                }
                 // the edit point nearest the mouse
                 let nearEnd = abs(L.x(s.outEnd) - p.x) < abs(L.x(s.outStart) - p.x)
                 let joinIdx = nearEnd ? k : k - 1
@@ -507,8 +559,10 @@ struct TimelinePanel: View {
                     if segs[joinIdx].splitAfter {
                         m.add("Join Blocks (remove the blade cut)") { model.joinSplit(atOutput: segs[joinIdx].outEnd) }
                     } else {
-                        let gap = c.ranges[segs[joinIdx].rangeIndex + 1].start - c.ranges[segs[joinIdx].rangeIndex].end
-                        m.add(String(format: "Put Back the %.1f s Cut Here", gap)) { model.closeGap(afterRange: segs[joinIdx].rangeIndex) }
+                        let gap = c.join(after: segs[joinIdx].rangeIndex).cut
+                        if gap > 0.05 {
+                            m.add(String(format: "Put Back the %.1f s Cut Here", gap)) { model.closeGap(afterRange: segs[joinIdx].rangeIndex) }
+                        }
                     }
                 }
                 m.addSeparator()
@@ -567,7 +621,8 @@ struct TimelinePanel: View {
             let color = angleColors[pc.angle % angleColors.count]
             while x0 + CGFloat(k) * tileW < xb {
                 let tx = x0 + CGFloat(k) * tileW
-                let tc = min(b, max(a, L.t(tx + tileW / 2)))
+                // a hair inside the piece: at its very edge the time belongs to the block before (another moment, once blocks are moved)
+                let tc = min(b - 1e-4, max(a + 1e-4, L.t(tx + tileW / 2)))
                 let master = clip?.masterTime(forOutput: tc) ?? tc
                 let img = thumbs.image(angle: pc.angle, sourceTime: master + model.project.angles[pc.angle].offset,
                                        step: step, loaded: src)
@@ -669,22 +724,68 @@ struct TimelinePanel: View {
                 }
             }
         }
+        // shots that follow a point: a teal line along the bottom; orange where it wasn't seen, red where it runs off the picture
+        if clip != nil {
+            for pc in model.tlPieces where model.follow(for: pc) != nil {
+                let a = max(L.start, pc.outStart), b = min(end, pc.outStart + pc.duration)
+                guard b > a else { continue }
+                let y = L.videoY + L.videoH - 8
+                ctx.fill(Path(roundedRect: CGRect(x: L.x(a) + 3, y: y, width: max(2, L.x(b) - L.x(a) - 6), height: 3), cornerRadius: 1.5),
+                         with: .color(followColor))
+                if let path = model.followPath(for: pc) {
+                    for (spans, col) in [(path.held, Color.orange), (path.edges, Color.red)] {
+                        for h in spans {
+                            let oa = max(a, pc.outStart + (h.lowerBound - pc.masterStart)), ob = min(b, pc.outStart + (h.upperBound - pc.masterStart))
+                            guard ob > oa else { continue }
+                            ctx.fill(Path(CGRect(x: L.x(oa), y: y - 1, width: max(2, L.x(ob) - L.x(oa)), height: 5)), with: .color(col))
+                        }
+                    }
+                }
+            }
+        }
         // block outlines, edit points
         for (k, s) in segs.enumerated() where s.outEnd > L.start && s.outStart < end {
             let r = CGRect(x: L.x(s.outStart) + 1, y: L.videoY + 2, width: max(2, L.x(s.outEnd) - L.x(s.outStart) - 2), height: L.videoH - 4)
             ctx.stroke(Path(roundedRect: r, cornerRadius: 5), with: .color(.white.opacity(0.35)), lineWidth: 1)
-            if clip != nil, k + 1 < segs.count, !s.splitAfter {
-                // something was cut out here
+            if let c = clip, k + 1 < segs.count, !s.splitAfter {
+                let j = c.join(after: s.rangeIndex)
                 let ex = L.x(s.outEnd)
-                var tri = Path()
-                tri.move(to: CGPoint(x: ex - 5, y: L.videoY - 1)); tri.addLine(to: CGPoint(x: ex + 5, y: L.videoY - 1)); tri.addLine(to: CGPoint(x: ex, y: L.videoY + 5))
-                ctx.fill(tri, with: .color(.red))
+                if j.moved {
+                    // the next block was moved here (it plays out of recording order): a gold diamond
+                    var dia = Path()
+                    dia.move(to: CGPoint(x: ex, y: L.videoY - 2)); dia.addLine(to: CGPoint(x: ex + 4, y: L.videoY + 2))
+                    dia.addLine(to: CGPoint(x: ex, y: L.videoY + 6)); dia.addLine(to: CGPoint(x: ex - 4, y: L.videoY + 2)); dia.closeSubpath()
+                    ctx.fill(dia, with: .color(Brand.gold))
+                } else if j.cut > 0.001 {
+                    // something was cut out here
+                    var tri = Path()
+                    tri.move(to: CGPoint(x: ex - 5, y: L.videoY - 1)); tri.addLine(to: CGPoint(x: ex + 5, y: L.videoY - 1)); tri.addLine(to: CGPoint(x: ex, y: L.videoY + 5))
+                    ctx.fill(tri, with: .color(.red))
+                }
             }
         }
         if model.tlSegmentSelected, let sel = model.tlSel,
            let s = segs.first(where: { abs($0.outStart - sel.lowerBound) < 0.001 && abs($0.outEnd - sel.upperBound) < 0.001 }) {
             let r = CGRect(x: L.x(s.outStart) + 1, y: L.videoY + 2, width: max(2, L.x(s.outEnd) - L.x(s.outStart) - 2), height: L.videoH - 4)
             ctx.stroke(Path(roundedRect: r, cornerRadius: 5), with: .color(.yellow), lineWidth: 3)
+        }
+        // a block being dragged to a new place: its old spot dimmed, the block under the mouse, a line where it would land
+        if let d = model.blockMove, segs.indices.contains(d.segment) {
+            let s = segs[d.segment]
+            let r0 = CGRect(x: L.x(s.outStart) + 1, y: L.videoY + 2, width: max(2, L.x(s.outEnd) - L.x(s.outStart) - 2), height: L.videoH - 4)
+            ctx.fill(Path(roundedRect: r0, cornerRadius: 5), with: .color(.black.opacity(0.55)))
+            let gx = L.x(d.at - d.grab)
+            let gr = CGRect(x: gx + 1, y: L.videoY + 6, width: r0.width, height: L.videoH - 12)
+            ctx.fill(Path(roundedRect: gr, cornerRadius: 5), with: .color(Brand.gold.opacity(0.28)))
+            ctx.stroke(Path(roundedRect: gr, cornerRadius: 5), with: .color(.yellow), lineWidth: 2)
+            if gr.width > 60 {
+                ctx.draw(Text(fmtSpan(s.master.duration)).font(.system(size: 10, weight: .bold).monospacedDigit()).foregroundColor(.yellow),
+                         at: CGPoint(x: gr.midX, y: gr.midY), anchor: .center)
+            }
+            if d.to != d.segment && d.to != d.segment + 1 {
+                let lx = d.to < segs.count ? L.x(segs[d.to].outStart) : L.x(segs.last?.outEnd ?? 0)
+                ctx.fill(Path(CGRect(x: lx - 1.5, y: L.videoY - 3, width: 3, height: L.videoH + 6)), with: .color(.yellow))
+            }
         }
         // manual camera cuts
         if let c = clip {
@@ -776,7 +877,7 @@ struct TimelinePanel: View {
         if !each {
             let segsS: [(Double, Double, [Bool])] = {
                 if let c = clip {
-                    return c.soundSegments().map { (c.outputTimeClamped(forMaster: $0.start), c.outputTimeClamped(forMaster: $0.end), $0.on) }
+                    return c.soundOutputSegments().map { ($0.start, $0.end, $0.on) }
                 }
                 return [(0, model.tlDuration, model.fullMix.on)]
             }()
@@ -793,7 +894,9 @@ struct TimelinePanel: View {
         // cut points through the sound too
         if clip != nil {
             for (i, s) in segs.enumerated() where i + 1 < segs.count && !s.splitAfter && s.outEnd >= L.start && s.outEnd <= end {
-                ctx.fill(Path(CGRect(x: L.x(s.outEnd) - 0.5, y: L.wordsY, width: 1, height: L.audioY + L.audioH - L.wordsY)), with: .color(.red.opacity(0.6)))
+                let moved = clip?.join(after: s.rangeIndex).moved ?? false
+                ctx.fill(Path(CGRect(x: L.x(s.outEnd) - 0.5, y: L.wordsY, width: 1, height: L.audioY + L.audioH - L.wordsY)),
+                         with: .color(moved ? Brand.gold.opacity(0.8) : .red.opacity(0.6)))
             }
         }
 

@@ -16,8 +16,9 @@ struct LoadedAngle {
 }
 
 enum MediaLoader {
-    static func load(_ a: AngleSource) async throws -> LoadedAngle {
-        let asset = AVURLAsset(url: a.url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+    static func load(_ a: AngleSource) async throws -> LoadedAngle { try await load(url: a.url) }
+    static func load(url: URL) async throws -> LoadedAngle {
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
         let v = try await asset.loadTracks(withMediaType: .video).first
         let au = try await asset.loadTracks(withMediaType: .audio).first
         let dur = try await asset.load(.duration).seconds
@@ -138,16 +139,27 @@ enum CompositionBuilder {
                 let tf = placement(l, render: render, framing: framing)
                 li.setTransform(tf, at: r.start)
                 ins.layerInstructions = [li]
+                // a shot that follows a point: the framing moves frame by frame
+                var motion: [(t: Double, tf: CGAffineTransform)] = []
+                var zoomedOut = framing.zoom < 0.999
+                if fmt != nil, let c = clip, let fp = followPath(c, piece: piece, l: l, render: render, base: framing) {
+                    let o0 = r.start.seconds, o1 = r.end.seconds
+                    for f in fp.frames {
+                        let o = min(o1, max(o0, o0 + (f.t - piece.masterStart)))
+                        motion.append((o, placement(l, render: render, framing: f.framing)))
+                        if f.framing.zoom < 0.999 { zoomedOut = true }
+                    }
+                }
                 framed[ObjectIdentifier(ins)] = FramedInstruction(
                     timeRange: r, trackID: track.trackID, transform: tf,
-                    background: framing.zoom < 0.999 ? placement(l, render: render, framing: Framing()) : nil,
-                    renderSize: render)
+                    background: zoomedOut ? placement(l, render: render, framing: Framing()) : nil,
+                    renderSize: render, motion: motion)
             }
             instructions.append(ins)
         }
         // instructions must cover the whole timeline with no gaps
         instructions = fillGaps(instructions, total: endT)
-        if framed.values.contains(where: { $0.background != nil }) {
+        if framed.values.contains(where: { $0.background != nil || $0.motion.count > 1 }) {
             vc.customVideoCompositorClass = FramingCompositor.self
             vc.instructions = instructions.map { ins in
                 if let f = framed[ObjectIdentifier(ins)] { f.timeRange = ins.timeRange; return f }
@@ -158,6 +170,15 @@ enum CompositionBuilder {
         }
         return BuiltEdit(composition: comp, videoComposition: vc, audioTracks: aTracks,
                          pieces: pieces, renderSize: render, duration: total)
+    }
+
+    /// The follow path for one shot, if its camera follows a point there.
+    static func followPath(_ c: Clip, piece: EditPiece, l: LoadedAngle, render: CGSize, base: Framing) -> FollowPath? {
+        let a = piece.masterStart, b = piece.masterStart + piece.duration
+        guard let tr = c.follow(forShotFrom: a, to: b, angle: piece.angle) else { return nil }
+        let zr = minZoom(source: l.naturalSize, render: render)...maxZoom
+        let p = Follow.path(tr, base: base, from: a, to: b, source: l.naturalSize, render: render, zoomRange: zr)
+        return p.frames.isEmpty ? nil : p
     }
 
     static func fitted(_ s: CGSize) -> CGSize {
@@ -207,17 +228,23 @@ enum CompositionBuilder {
     /// Scale-to-fill the frame, then slide/zoom according to framing. Below 1× the picture is smaller than
     /// the frame and can slide anywhere inside it.
     static func placement(_ l: LoadedAngle, render: CGSize, framing: Framing) -> CGAffineTransform {
-        let W = l.naturalSize.width, H = l.naturalSize.height
+        let (s, tx, ty) = placementParts(natural: l.naturalSize, render: render, framing: framing)
+        // preferredTransform may move the picture off-origin when it rotates; normalise first
+        let rect = CGRect(origin: .zero, size: l.rawSize).applying(l.transform)
+        let norm = l.transform.concatenating(CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+        return norm.concatenating(CGAffineTransform(scaleX: s, y: s)).concatenating(CGAffineTransform(translationX: tx, y: ty))
+    }
+
+    /// Upright camera pixels → frame pixels: scale `s`, then move by tx, ty (y down).
+    static func placementParts(natural: CGSize, render: CGSize, framing: Framing) -> (s: CGFloat, tx: CGFloat, ty: CGFloat) {
+        let W = max(1, natural.width), H = max(1, natural.height)
         let s = max(render.width / W, render.height / H) * CGFloat(max(0.05, framing.zoom))
         let sw = W * s, sh = H * s
         var tx = render.width / 2 - CGFloat(framing.x) * sw
         var ty = render.height / 2 - CGFloat(framing.y) * sh
         tx = min(max(0, render.width - sw), max(min(0, render.width - sw), tx))
         ty = min(max(0, render.height - sh), max(min(0, render.height - sh), ty))
-        // preferredTransform may move the picture off-origin when it rotates; normalise first
-        let rect = CGRect(origin: .zero, size: l.rawSize).applying(l.transform)
-        let norm = l.transform.concatenating(CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
-        return norm.concatenating(CGAffineTransform(scaleX: s, y: s)).concatenating(CGAffineTransform(translationX: tx, y: ty))
+        return (s, tx, ty)
     }
 
     /// Volume per source over the edit. With a clip, the sound can change partway through
@@ -232,7 +259,7 @@ enum CompositionBuilder {
         // stretches of constant sound in output time
         var segs: [(out: Double, on: [Bool])] = [(0, mix.on)]
         if let clip {
-            segs = clip.soundSegments().map { (clip.outputTimeClamped(forMaster: $0.start), $0.on) }
+            segs = clip.soundOutputSegments().map { ($0.start, $0.on) }
         }
         // AVAudioMix volumes top out at 1.0; keep the balance by scaling the loudest to 1
         var peak: Float = 0

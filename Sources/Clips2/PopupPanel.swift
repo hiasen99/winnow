@@ -493,8 +493,9 @@ struct PositionTile: View {
     var body: some View {
         let pc = model.shotAtPlayhead
         let own = pc.map { model.shotHasOwnFraming($0) } ?? false
-        InspectorTile(title: "Position", icon: "crop", tint: own ? Brand.gold : .secondary,
-                      detail: clip.format.label + (model.frameScope == .shot ? " · this shot" : "") + (own ? " · own framing" : "")) {
+        let follows = pc.map { model.follow(for: $0) != nil } ?? false
+        InspectorTile(title: "Position", icon: follows ? "scope" : "crop", tint: follows ? followColor : own ? Brand.gold : .secondary,
+                      detail: clip.format.label + (model.frameScope == .shot ? " · this shot" : "") + (own ? " · own framing" : "") + (follows ? " · following" : "")) {
             Button { model.showFraming.toggle() } label: { Text("Framing…").frame(maxWidth: .infinity) }
                 .help("Shape of the clip, safe zones, and moving / zooming each camera's picture (or just one shot). You can also drag the picture in the viewer, or pinch to zoom.")
                 .popover(isPresented: $model.showFraming, arrowEdge: .trailing) {

@@ -298,16 +298,8 @@ extension Control {
             s = s.map { max(0, $0) }; e = e.map { min(m.project.masterDuration, $0) }
             guard (e ?? c.end) > (s ?? c.start) + 0.3 else { throw ControlError("The start has to stay before the end.") }
             change(m, c.id) { clip in
-                if let s {
-                    let old = clip.start
-                    clip.ranges = clip.ranges.compactMap { r in r.end <= s ? nil : TimeRange(start: max(r.start, s), end: r.end) }
-                    if s < old || clip.ranges.isEmpty { clip.ranges.insert(TimeRange(start: s, end: clip.ranges.first?.start ?? (e ?? c.end)), at: 0) }
-                }
-                if let e {
-                    let old = clip.end
-                    clip.ranges = clip.ranges.compactMap { r in r.start >= e ? nil : TimeRange(start: r.start, end: min(r.end, e)) }
-                    if e > old || clip.ranges.isEmpty { clip.ranges.append(TimeRange(start: clip.ranges.last?.end ?? (s ?? c.start), end: e)) }
-                }
+                if let s { clip.setRecordingStart(s) }
+                if let e { clip.setRecordingEnd(e) }
             }
             return clipRef(m, c.id)
         }),
@@ -330,6 +322,54 @@ extension Control {
             guard test.outputDuration > 0.3 else { throw ControlError("That would cut the whole clip.") }
             change(m, c.id) { $0.cut(f, t) }
             return clipRef(m, c.id)
+        }),
+        ControlCommand(id: "clip.blade", label: "Blade (split a block)", menu: "Clip ▸ Blade at Playhead", key: "B / ⌘B", changesProject: true,
+                       params: "{clip?, at?: recording seconds, or out?: seconds into the finished clip; remove?: true joins the blocks again at that point}",
+                       enabled: { hasClips($0) },
+                       run: { app, a in
+            let m = try model(app)
+            let c = try targetClip(m, a)
+            let t: Double
+            if let o = a.num("out") { t = c.masterTime(forOutput: o) }
+            else if let x = a.num("at") { t = x }
+            else { throw ControlError("Pass {\"at\": recording seconds} or {\"out\": seconds into the clip}.") }
+            if a.bool("remove") == true {
+                change(m, c.id) { clip in clip.splits?.removeAll { abs($0 - t) < 0.02 }; if clip.splits?.isEmpty == true { clip.splits = nil } }
+            } else {
+                guard c.ranges.contains(where: { t > $0.start + 0.05 && t < $0.end - 0.05 }) else {
+                    throw ControlError("That moment isn't inside a kept part of the clip (or is right at a block edge).")
+                }
+                change(m, c.id) { $0.splits = ($0.splits ?? []) + [t] }
+            }
+            var r = clipRef(m, c.id)
+            if let fresh = m.project.clips.first(where: { $0.id == c.id }) {
+                r["timelineBlocks"] = fresh.segments.enumerated().map { ["number": $0.offset + 1, "start": r3($0.element.master.start), "end": r3($0.element.master.end), "out": r3($0.element.outStart)] }
+            }
+            return r
+        }),
+        ControlCommand(id: "clip.moveBlock", label: "Move a Block (reorder the clip)", menu: "Timeline: click a block, drag it; or right-click ▸ Move Block Earlier / Later", key: "⌥← / ⌥→", changesProject: true,
+                       params: "{clip?, block: number (as in clip_inspect timelineBlocks), to: its new number (1 = plays first, last = plays last)}. Blade first (clip.blade) to move only part of a block. Camera, sound, framing and captions of those moments go with it.",
+                       enabled: { hasClips($0) },
+                       run: { app, a in
+            let m = try model(app)
+            let c = try targetClip(m, a)
+            let segs = c.segments
+            guard let b = a.num("block").map({ Int($0) }), b >= 1, b <= segs.count else {
+                throw ControlError("Pass {\"block\": 1…\(segs.count)} (the block's number in clip_inspect timelineBlocks).")
+            }
+            guard let to = a.num("to").map({ Int($0) }), to >= 1, to <= segs.count else {
+                throw ControlError("Pass {\"to\": 1…\(segs.count)}: the block's new number.")
+            }
+            let from = b - 1, p = to - 1
+            guard p != from else { return clipRef(m, c.id) }
+            guard let new = c.movingSegment(from, before: p > from ? p + 1 : p) else { return clipRef(m, c.id) }
+            change(m, c.id) { $0 = new }
+            var r = clipRef(m, c.id)
+            if let fresh = m.project.clips.first(where: { $0.id == c.id }) {
+                r["timelineBlocks"] = fresh.segments.enumerated().map { ["number": $0.offset + 1, "start": r3($0.element.master.start), "end": r3($0.element.master.end), "out": r3($0.element.outStart)] }
+                r["playsInOrder"] = fresh.playsInOrder
+            }
+            return r
         }),
         ControlCommand(id: "clip.restore", label: "Put Cut Parts Back", menu: "Clip ▸ Restore", changesProject: true,
                        params: "{clip?, from?, to?: recording seconds; omit both to restore everything between the clip's start and end}",

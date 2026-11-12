@@ -79,7 +79,9 @@ extension ProjectModel {
             guard let first = ws.first else { continue }
             let words = ws.map { Word(text: $0.raw, start: $0.mStart, end: $0.mEnd) }
             let s = min(first.mStart, c.masterTime(forOutput: p.start))
-            let e = max(s + 0.1, c.masterTime(forOutput: p.end))
+            // with blocks moved, a caption's tail may hang into the next block: stop it at the end of its own
+            let e = c.playsInOrder ? max(s + 0.1, c.masterTime(forOutput: p.end))
+                : max(s + 0.1, c.masterTime(forOutput: max(p.start, min(p.end, c.outputRangeEnd(containing: p.start)) - 0.0005)))
             out.append(CaptionBlock(id: ids[k], start: s, end: e, words: words, covers: TimeRange(start: s, end: e)))
         }
         // hand-made captions that are cut out of the clip right now are kept as they are

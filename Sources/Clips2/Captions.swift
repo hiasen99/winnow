@@ -11,6 +11,8 @@ struct CaptionWord {
     var raw: String = ""        // as typed / transcribed
     var mStart: Double = 0      // master time
     var mEnd: Double = 0
+    /// which stretch it plays in, when the clip plays blocks out of recording order (else 0): captions never span two
+    var part: Int = 0
 }
 
 struct CaptionPage {
@@ -44,6 +46,14 @@ enum Captions {
             let text = uppercase ? w.text.uppercased() : w.text
             out.append(CaptionWord(text: text, start: min(s, o), end: max(e, o), raw: w.text, mStart: w.start, mEnd: w.end))
         }
+        if !clip.playsInOrder {
+            // blocks were moved: words in the order they play, each knowing which piece it's in
+            // (a new piece starts wherever the clip jumps to a part that was moved, not at plain cuts)
+            var partOf: [Int] = []
+            for i in clip.ranges.indices { partOf.append(i == 0 ? 0 : partOf[i - 1] + (clip.join(after: i - 1).moved ? 1 : 0)) }
+            for k in out.indices { out[k].part = partOf[clip.rangeIndex(atOutput: (out[k].start + out[k].end) / 2)] }
+            out = out.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map { $0.element }
+        }
         return out
     }
 
@@ -67,7 +77,12 @@ enum Captions {
         var parts: [(page: CaptionPage, words: [CaptionWord])] = []
         var handSpans: [(Double, Double)] = []   // output time
         for b in blocks {
-            let bs = clip.outputTimeClamped(forMaster: b.start), be = clip.outputTimeClamped(forMaster: b.end)
+            var bs = clip.outputTimeClamped(forMaster: b.start), be = clip.outputTimeClamped(forMaster: b.end)
+            if !clip.playsInOrder {
+                // blocks were moved: the caption shows where (most of) its stretch of the recording plays
+                guard let sp = clip.outputSpan(fromMaster: b.start, to: b.end) else { continue }
+                bs = sp.start; be = sp.end
+            }
             guard be - bs > 0.01 else { continue }       // cut out of the clip entirely
             var ws = place(b.words, clip: clip, uppercase: style.uppercase, lenient: true)
             for k in ws.indices {
@@ -197,7 +212,7 @@ enum Captions {
                 let gap = w.start - words[i - 1].end
                 let prev = words[i - 1].text
                 let sentenceEnd = prev.hasSuffix(".") || prev.hasSuffix("?") || prev.hasSuffix("!")
-                if gap > style.pauseBreak || (sentenceEnd && lines.count == style.maxLines && lineChars > style.maxCharsPerLine / 2) {
+                if gap > style.pauseBreak || w.part != words[i - 1].part || (sentenceEnd && lines.count == style.maxLines && lineChars > style.maxCharsPerLine / 2) {
                     flush(w.start)
                 }
             }

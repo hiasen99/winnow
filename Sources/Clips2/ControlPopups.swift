@@ -188,7 +188,7 @@ extension Control {
             let m = try model(app)
             let c = try targetClip(m, a)
             let showing = c.id == m.selectedClipID
-            var p = FollowPopup(time: c.start)
+            var p = FollowPopup(time: c.masterTime(forOutput: 0))
             if let k = a.str("kind") { try applyPopup(&p, Args(["kind": k]), clip: c) }
             let spot = FollowPopup.defaultSpot(p.kind, c.format)
             p.x = spot.x; p.y = spot.y

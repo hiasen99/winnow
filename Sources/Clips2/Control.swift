@@ -245,7 +245,11 @@ enum Control {
         var d = clipSummary(c, index: idx)
         d["timeNote"] = "start/end/kept/blocks/switch times are seconds in the full recording; 'out' and caption times are seconds into the finished clip."
         d["kept"] = c.ranges.map { [r3($0.start), r3($0.end)] }
-        d["timelineBlocks"] = c.segments.map { ["start": r3($0.master.start), "end": r3($0.master.end), "out": r3($0.outStart)] }
+        d["timelineBlocks"] = c.segments.enumerated().map { ["number": $0.offset + 1, "start": r3($0.element.master.start), "end": r3($0.element.master.end), "out": r3($0.element.outStart)] }
+        if !c.playsInOrder {
+            d["playsInOrder"] = false
+            d["orderNote"] = "Blocks were moved (clip.moveBlock): 'kept' and 'timelineBlocks' are listed in the order they play, not recording order. start/end are the earliest/latest moments used."
+        }
         d["cameraSwitches"] = c.switches.map { s -> [String: Any] in
             ["time": r3(s.time), "out": r3(c.outputTimeClamped(forMaster: s.time)), "camera": s.angle.map { angleName($0, p) } ?? "auto"]
         }
@@ -265,6 +269,8 @@ enum Control {
             }
             return e
         }
+        if c.follows?.isEmpty == false { d["follows"] = followInfo(m, c) }
+        if let job = m.followJob, job.clipID == c.id { d["followTracking"] = ["progress": r3(m.followProgress), "time": r3(job.time)] }
         d["framing"] = p.videoIndices.map { i -> [String: Any] in
             let f = c.framing(for: i)
             var e: [String: Any] = ["camera": angleName(i, p), "x": r3(f.x), "y": r3(f.y), "zoom": r3(f.zoom)]
@@ -361,7 +367,7 @@ enum Control {
     static func hasProject(_ app: AppState) -> Bool { app.claude != nil }
     static func hasClips(_ app: AppState) -> Bool { !(app.claude?.project.clips.isEmpty ?? true) }
 
-    static let commands: [ControlCommand] = baseCommands + editCommands + captionCommands + renderCommands + stillCommands + popupCommands
+    static let commands: [ControlCommand] = baseCommands + editCommands + captionCommands + renderCommands + stillCommands + popupCommands + followCommands
 
     static let baseCommands: [ControlCommand] = [
         ControlCommand(id: "app.show", label: "Show Winnow Window", menu: "Open Winnow (Dock, Finder, Spotlight)",

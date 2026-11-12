@@ -17,12 +17,15 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
 - **Edit on a real timeline.** Final Cut-style timeline with trimming, blade, markers,
   snapping and skimming. Cameras switch automatically to whoever is speaking. Select any
   stretch and pick a camera or the mics you hear for exactly that stretch, and use ↑ / ↓
-  to jump from cut to cut.
+  to jump from cut to cut. Drag a block to a new place to reorder the clip (or ⌥← / ⌥→);
+  its camera, sound, framing and captions go with it.
 - **Frame each camera, or each shot.** Move and zoom each camera's picture inside the
   vertical, square or wide frame, reframe a single shot when someone moves, and give each
   camera its own caption height so captions stay clear of faces and mics. Zoom out below
   1× (or press *Fit* to show a wide camera whole in a vertical clip) and a blurred copy of
-  the picture fills the frame behind it. Click any slider's value to type an exact number.
+  the picture fills the frame behind it. When the camera drifts, pans or zooms, pick a
+  point (a face, or anything that should stay put) and the framing follows it frame by
+  frame. Click any slider's value to type an exact number.
 - **Captions that are easy to fix.** Captions are blocks on the timeline: drag to move,
   drag edges to re-time, double-click to fix the text. Style presets for the look, with
   any installed font and any weight (or any thickness on a variable font). The box

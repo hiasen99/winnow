@@ -350,6 +350,29 @@ enum SelfTest {
                     let appear = kfm.rects.first.map { Double($0.width) } ?? 0
                     log(String(format: "word box glide: %d key frames, appears at %.0f%% size, overshoot %.1f%%, settles in %.0f ms",
                                kfm.times.count, appear, (peakX - 230) / 180 * 100, ((moveKF.last?.0 ?? 2) - 2) * 1000))
+                    // follow a point: a made-up track of a camera drifting and zooming; the point must stay put in a 9:16 frame
+                    do {
+                        var tr = FollowTrack(angle: 0, start: 0, end: 4)
+                        var run = FollowRun(pick: FollowPick(time: 0.5, rect: CGRect(x: 0.55, y: 0.45, width: 0.1, height: 0.1)), samples: [])
+                        for i in 0...120 {
+                            let t = Double(i) / 30, z = 1 + 0.1 * t
+                            run.samples.append(FollowSample(t: t, x: 0.5 + (0.1 + 0.03 * sin(t * 2)) * z, y: 0.5 + 0.02 * cos(t * 3), s: 0.1 * z))
+                        }
+                        tr.runs = [run]; tr.lockSize = true; tr.smoothing = 0
+                        let src = CGSize(width: 1920, height: 1080), rnd = ClipFormat.vertical.renderSize
+                        let p = Follow.path(tr, base: Framing(x: 0.5, y: 0.5, zoom: 1), from: 0, to: 4, source: src, render: rnd,
+                                            zoomRange: CompositionBuilder.minZoom(source: src, render: rnd)...CompositionBuilder.maxZoom)
+                        var outs: [CGPoint] = [], sizes: [Double] = []
+                        for f in p.frames {
+                            let pp = CompositionBuilder.placementParts(natural: src, render: rnd, framing: f.framing)
+                            outs.append(CGPoint(x: f.feature.x * src.width * pp.s + pp.tx, y: f.feature.y * src.height * pp.s + pp.ty))
+                            sizes.append(f.size * Double(pp.s))
+                        }
+                        let moved = outs.map { hypot($0.x - outs[0].x, $0.y - outs[0].y) }.max() ?? 0
+                        let grew = (sizes.max() ?? 0) / max(1e-9, sizes.min() ?? 1)
+                        log(String(format: "follow: %d frames, extra zoom %.2f, point moves %.2f px, size varies %.1f%%, edges %d",
+                                   p.frames.count, p.boost, moved, (grew - 1) * 100, p.edges.count))
+                    }
                     // a camera with its own caption height
                     let ang = m.project.videoIndices.first ?? 0
                     m.updateClip { c in
@@ -412,6 +435,74 @@ enum SelfTest {
                     }
                     m.undo(); m.undo()
                     log("after undo: switches \(m.selectedClip?.switches.count ?? -1), sound changes \(m.selectedClip?.soundChanges.count ?? -1)")
+                }
+                // --- 1.10: moving blocks (reordering a clip) ---
+                do {
+                    let c0 = m.selectedClip!
+                    let L = c0.outputDuration
+                    let undoBase = m.undoStack.count
+                    m.engine.seek(L * 0.34); m.bladeAtPlayhead()
+                    m.engine.seek(L * 0.67); m.bladeAtPlayhead()
+                    let s0 = m.selectedClip!.segments
+                    var problems: [String] = []
+                    if s0.count < 3 { problems.append("blocks \(s0.count)") }
+                    let C = s0.last!.master, A = s0.first!.master
+                    let angC = Schedule.angle(at: (C.start + C.end) / 2, clip: m.selectedClip!, auto: m.auto, project: m.project)
+                    // every caption hand-edited first (one of them runs across the edge of the block that moves)
+                    if let it = m.captionItems.first(where: { $0.start < s0.last!.outStart && $0.end > s0.last!.outStart })
+                        ?? m.captionItems.last { m.setCaptionText(it.id, it.text + " x") }
+                    let wordsBefore = Captions.track(for: m.selectedClip!, project: m.project).words.count
+                    m.moveSegment(s0.count - 1, before: 0)
+                    let c1 = m.selectedClip!
+                    let s1 = c1.segments
+                    if abs(s1[0].master.start - C.start) > 0.002 { problems.append("first block not the moved one") }
+                    if c1.playsInOrder { problems.append("still in order") }
+                    if abs(c1.outputDuration - L) > 0.002 { problems.append(String(format: "length %.3f vs %.3f", c1.outputDuration, L)) }
+                    if abs(c1.masterTime(forOutput: 0.01) - (C.start + 0.01)) > 0.002 { problems.append("output 0 not at the moved block") }
+                    if m.selectedSegmentIndex != 0 { problems.append("moved block not selected (\(m.selectedSegmentIndex.map(String.init) ?? "none"))") }
+                    let pcs = Schedule.pieces(project: m.project, clip: c1, auto: m.auto)
+                    if pcs.first?.angle != angC { problems.append("camera didn't travel with the block") }
+                    let b = try CompositionBuilder.build(project: m.project, clip: c1, auto: m.auto, loaded: m.sources, format: c1.format)
+                    if abs(b.duration - L) > 0.01 { problems.append(String(format: "composition %.3f", b.duration)) }
+                    _ = CompositionBuilder.audioMix(b, mix: c1.audio, angles: m.project.angles, clip: c1)
+                    let so = c1.soundOutputSegments()
+                    if abs((so.last?.end ?? 0) - L) > 0.01 || abs(so.first?.start ?? 1) > 0.001 { problems.append("sound segments \(so.count)") }
+                    let tr = Captions.track(for: c1, project: m.project)
+                    let ordered = zip(tr.pages, tr.pages.dropFirst()).allSatisfy { $0.start <= $1.start + 1e-6 }
+                    let mixed = tr.pages.filter { pg in Set(pg.wordIndexes.map { tr.words[$0].part }).count > 1 }.count
+                    if !ordered || mixed > 0 { problems.append("captions ordered \(ordered) mixed \(mixed)") }
+                    // each word shows where its moment of the recording plays now
+                    let outOfPlace = tr.words.filter { w in
+                        guard let o = c1.outputTime(forMaster: (w.mStart + w.mEnd) / 2) else { return false }
+                        return abs(o - (w.start + w.end) / 2) > 0.5
+                    }.count
+                    if tr.words.count != wordsBefore || outOfPlace > 0 { problems.append("caption words \(tr.words.count) vs \(wordsBefore), \(outOfPlace) out of place") }
+                    let ws = m.tlWords()
+                    if !zip(ws, ws.dropFirst()).allSatisfy({ $0.start <= $1.start + 1e-6 }) { problems.append("timeline words out of order") }
+                    let back = try Store.decoder.decode(Project.self, from: Store.encoder.encode(m.project))
+                    if back.clips.first(where: { $0.id == c1.id })?.ranges != c1.ranges { problems.append("order lost on reload") }
+                    // hand-edit a caption in the reordered clip
+                    if let it = m.captionItems.first { m.setCaptionText(it.id, it.text + " test") }
+                    let handOK = m.captionItems.contains { $0.text.hasSuffix(" test") }
+                    if !handOK { problems.append("caption edit lost") }
+                    m.undo()
+                    // ⌥→ moves it one later, cutting inside it keeps the order, trimming the end to the playhead works in play order
+                    m.moveSelectedSegment(by: 1)
+                    if abs(m.selectedClip!.segments[1].master.start - C.start) > 0.002 { problems.append("⌥→ didn't move it") }
+                    m.moveSelectedSegment(by: -1)
+                    let c2 = m.selectedClip!
+                    m.tlSel = (c2.segments[0].outStart + 0.1)...(c2.segments[0].outStart + 0.3)
+                    m.cutTimelineSelection()
+                    let c3 = m.selectedClip!
+                    if abs(c3.outputDuration - (L - 0.2)) > 0.01 || abs(c3.ranges[0].start - C.start) > 0.002 { problems.append(String(format: "cut in moved block: length %.3f", c3.outputDuration)) }
+                    m.undo()
+                    // put it back at the end: plays in order again and the blade points are still there
+                    m.moveSegment(0, before: m.selectedClip!.segments.count)
+                    let c4 = m.selectedClip!
+                    if !c4.playsInOrder || c4.segments.count != s0.count || abs(c4.segments[0].master.start - A.start) > 0.002 { problems.append("moving back: in order \(c4.playsInOrder), blocks \(c4.segments.count)") }
+                    while m.undoStack.count > undoBase { m.undo() }
+                    if m.selectedClip!.ranges != c0.ranges || m.selectedClip!.splits != c0.splits { problems.append("undo didn't restore the clip") }
+                    log("reorder: \(s0.count) blocks, moved last to first, \(pcs.count) shots, \(tr.pages.count) captions, \(so.count) sound stretches " + (problems.isEmpty ? "ok" : "FAILED " + problems.joined(separator: "; ")))
                 }
             }
             m.zoomTimeline(by: 4, around: 2)
