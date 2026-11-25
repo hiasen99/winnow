@@ -104,15 +104,34 @@ enum Aligner {
             stats.segments += 1
             let (lp, T) = try emissions(model, x)
             let V = labels.count
-            // tokens: letters of each word, "|" between words, -1 = "any sound" for words with no letters (numbers…)
-            var toks: [Int] = [], owner: [Int] = []
-            for (j, wi) in seg.enumerated() {
-                if j > 0 { toks.append(1); owner.append(-1) }
-                var tk = tokens(words[wi].text)
-                if tk.isEmpty { tk = [-1] }
-                for k in tk { toks.append(k); owner.append(j) }
+            // tokens: letters of each word, "|" between words. Numbers and symbols ("$50", "1990s") are
+            // listened for as spoken words; when there are several ways to say one, the reading that
+            // fits the sound best wins. -1 = "any sound" for a word with nothing to read at all.
+            let alts = seg.map { choices(words[$0].text) }
+            var choice = [Int](repeating: 0, count: seg.count)
+            func build(_ ch: [Int]) -> (toks: [Int], owner: [Int]) {
+                var toks: [Int] = [], owner: [Int] = []
+                for j in 0..<ch.count {
+                    if j > 0 { toks.append(1); owner.append(-1) }
+                    for k in alts[j].tokens[ch[j]] { toks.append(k); owner.append(j) }
+                }
+                return (toks, owner)
             }
-            guard let path = viterbi(lp, T: T, V: V, toks: toks) else { stats.kept += seg.count; continue }
+            var (toks, owner) = build(choice)
+            guard var best = viterbi(lp, T: T, V: V, toks: toks) else { stats.kept += seg.count; continue }
+            for j in alts.indices where alts[j].tokens.count > 1 {
+                for a in alts[j].tokens.indices where a != choice[j] {
+                    var trial = choice; trial[j] = a
+                    let b = build(trial)
+                    if let r = viterbi(lp, T: T, V: V, toks: b.toks), r.score > best.score {
+                        best = r; choice = trial; (toks, owner) = b
+                    }
+                }
+            }
+            for j in alts.indices where !alts[j].said.isEmpty {
+                Log.write("aligner: \"\(words[seg.lowerBound + j].text)\" heard as \"\(alts[j].said[choice[j]])\"")
+            }
+            let path = best.path
             var firstF = [Int](repeating: -1, count: seg.count), lastF = [Int](repeating: -1, count: seg.count)
             var confSum: Float = 0, confN = 0
             for t in 0..<T {
@@ -169,6 +188,33 @@ enum Aligner {
         return segs
     }
 
+    /// The token lists the aligner may listen for, for one word: its letters, or for numbers and
+    /// symbols each spoken reading (`said` holds those readings, for the log; empty for plain words).
+    static func choices(_ text: String) -> (tokens: [[Int]], said: [String]) {
+        if let r = SpokenForm.readings(text) {
+            var tk: [[Int]] = [], said: [String] = []
+            for reading in r {
+                let t = tokens(phrase: reading)
+                if !t.isEmpty { tk.append(t); said.append(reading) }
+            }
+            if !tk.isEmpty { return (tk, said) }
+        }
+        let t = tokens(text)
+        return ([t.isEmpty ? [-1] : t], [])
+    }
+
+    /// Tokens for several words, with "|" between them.
+    static func tokens(phrase: String) -> [Int] {
+        var out: [Int] = []
+        for w in phrase.split(separator: " ") {
+            let t = tokens(String(w))
+            if t.isEmpty { continue }
+            if !out.isEmpty { out.append(1) }
+            out += t
+        }
+        return out
+    }
+
     static func tokens(_ text: String) -> [Int] {
         let t = text.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US"))
             .uppercased().replacingOccurrences(of: "\u{2019}", with: "'").replacingOccurrences(of: "\u{2018}", with: "'")
@@ -213,8 +259,9 @@ enum Aligner {
     }
 
     /// CTC Viterbi: the best path through blank / token states. Returns the state for every frame
-    /// (even = blank, odd = token (state-1)/2), or nil if there are more tokens than frames.
-    static func viterbi(_ lp: [Float], T: Int, V: Int, toks: [Int]) -> [Int]? {
+    /// (even = blank, odd = token (state-1)/2) and the path's total log-probability (comparable between
+    /// token lists for the same sound), or nil if there are more tokens than frames.
+    static func viterbi(_ lp: [Float], T: Int, V: Int, toks: [Int]) -> (path: [Int], score: Float)? {
         let L = toks.count, S = 2 * L + 1
         guard T >= L, L > 0 else { return nil }
         var any = [Float](repeating: -1e30, count: T)      // best real letter, for "any sound" tokens
@@ -240,12 +287,13 @@ enum Aligner {
         }
         var s = prev[S - 1] >= prev[S - 2] ? S - 1 : S - 2
         guard prev[s] > NEG / 2 else { return nil }
+        let score = prev[s]
         var path = [Int](repeating: 0, count: T)
         for t in stride(from: T - 1, through: 0, by: -1) {
             path[t] = s
             s -= Int(back[t * S + s])
         }
-        return path
+        return (path, score)
     }
 
     // MARK: - Sound helpers

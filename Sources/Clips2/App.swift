@@ -411,6 +411,21 @@ enum Entry {
             Task { @MainActor in exit(await SelfTest.resyncTest(folder: f)) }
             dispatchMain()
         }
+        if let i = args.firstIndex(of: "--numbertest") {
+            // --numbertest [words…]: how numbers and symbols are read out for the aligner
+            var w = Array(args[(i + 1)...])
+            if w.isEmpty {
+                w = ["$50", "25", "9", "1,500", "1500", "1990s", "'90s", "2026", "2005", "1905", "3:30", "3:05", "10:00",
+                     "24/7", "1/2", "3/4", "2-3", "800-555-1234", "5551234", "50%", "1st", "22nd", "3rd", "4th", "$4.99",
+                     "$1", "$0.50", "$5M", "5k", "10x", "100+", "#1", "3pm", "COVID-19", "3.5", "0.25", "007", "911",
+                     "and/or", "&", "hello", "John 3:16,", "$1,000,000", "1,000"]
+            }
+            for x in w {
+                let r = SpokenForm.readings(x)
+                print(x, "→", r.map { $0.joined(separator: " | ") } ?? "(plain word)")
+            }
+            exit(0)
+        }
         if let i = args.firstIndex(of: "--aligntest"), i + 3 < args.count {
             // --aligntest <16 kHz mono wav> <words.json> <out.json>
             let a = Array(args[(i + 1)...(i + 3)])
