@@ -371,6 +371,33 @@ extension Control {
             }
             return r
         }),
+        ControlCommand(id: "clip.tighten", label: "Tighten Clip (pauses, ums, repeats)", menu: "Clip ▸ Tighten Clip…", key: "⌥⌘T", changesProject: true,
+                       params: "{clip?, pauseOver? (s, default 0.5: pauses longer than this are shortened), keepPause? (s, default 0.25: what's left), fillers? (um/uh in the transcript), repeats? (\"I I\", \"and-\"), sounds? (short sounds between words the transcript left out), edges? (dead air at start/end) — all default true; dryRun?: true = list the cuts without making them; skip?: [cut numbers from the list to leave alone]}. One Undo step; every cut shows on the timeline and can be put back (clip.restore).",
+                       enabled: { hasClips($0) },
+                       run: { app, a in
+            let m = try model(app)
+            let c = try targetClip(m, a)
+            var s = TightenSettings()
+            if let v = a.num("pauseOver") { s.pauseOver = min(5, max(0.2, v)) }
+            if let v = a.num("keepPause") { s.keepPause = min(1, max(0, v)) }
+            if let v = a.bool("fillers") { s.fillers = v }
+            if let v = a.bool("repeats") { s.repeats = v }
+            if let v = a.bool("sounds") { s.sounds = v }
+            if let v = a.bool("edges") { s.edges = v }
+            var cuts = m.tightenPlan(c, s)
+            let skip = Set(((a.d["skip"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue })
+            for i in cuts.indices where skip.contains(i + 1) { cuts[i].on = false }
+            let list: [[String: Any]] = cuts.enumerated().map { i, x in
+                ["number": i + 1, "kind": x.kind.rawValue, "what": x.text, "from": r3(x.start), "to": r3(x.end), "length": r3(x.length),
+                 "out": r3(c.outputTime(forMaster: x.start) ?? 0), "on": x.on]
+            }
+            let total = cuts.filter { $0.on }.reduce(0) { $0 + $1.length }
+            if a.bool("dryRun") == true {
+                return ["cuts": list, "wouldCut": r3(total), "clipLength": r3(c.outputDuration), "after": r3(c.outputDuration - total)]
+            }
+            let msg = m.applyTighten(clipID: c.id, cuts)
+            return ["result": msg, "cuts": list, "clip": clipRef(m, c.id)]
+        }),
         ControlCommand(id: "clip.restore", label: "Put Cut Parts Back", menu: "Clip ▸ Restore", changesProject: true,
                        params: "{clip?, from?, to?: recording seconds; omit both to restore everything between the clip's start and end}",
                        enabled: { hasClips($0) },

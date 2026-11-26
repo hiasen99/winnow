@@ -12,6 +12,26 @@ enum FontCatalog {
         let italic: Bool
     }
 
+    /// Fonts that come with Winnow (Contents/Resources/Fonts, e.g. Roboto Condensed for the Descript look),
+    /// registered for this process the first time any font is looked up.
+    static let bundledFonts: Void = {
+        var dirs: [URL] = []
+        if let r = Bundle.main.resourceURL { dirs.append(r.appendingPathComponent("Fonts")) }
+        if let e = Bundle.main.executableURL {   // a test build: <src>/.build/release/Clips2 → <src>/Resources/Fonts
+            dirs.append(e.deletingLastPathComponent().appendingPathComponent("../../Resources/Fonts").standardized)
+        }
+        dirs.append(URL(fileURLWithPath: "/Applications/Winnow.app/Contents/Resources/Fonts"))
+        for d in dirs {
+            guard let files = try? FileManager.default.contentsOfDirectory(at: d, includingPropertiesForKeys: nil) else { continue }
+            let fonts = files.filter { ["ttf", "otf"].contains($0.pathExtension.lowercased()) }
+            guard !fonts.isEmpty else { continue }
+            for u in fonts { CTFontManagerRegisterFontsForURL(u as CFURL, .process, nil) }
+            Log.write("fonts: registered \(fonts.count) bundled font(s) from \(d.path)")
+            return
+        }
+    }()
+    static func registerBundledFonts() { _ = bundledFonts }
+
     /// 'wght' as an OpenType axis tag.
     static let wghtTag = 0x77676874
 
@@ -22,6 +42,7 @@ enum FontCatalog {
     @MainActor private static var familyCache: [String]? = nil
     @MainActor static var families: [String] {
         if let f = familyCache { return f }
+        registerBundledFonts()
         let f = NSFontManager.shared.availableFontFamilies
             .filter { !$0.hasPrefix(".") }
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
@@ -107,6 +128,7 @@ enum FontCatalog {
 
     /// The caption font: the stored font, drawn at `weight` on its weight axis if it has one.
     static func font(_ name: String, size: CGFloat, weight: Double?) -> NSFont? {
+        registerBundledFonts()
         guard let f = NSFont(name: name, size: size) else { return nil }
         guard let w = weight, let ax = weightAxis(name) else { return f }
         let v = min(ax.max, max(ax.min, w))

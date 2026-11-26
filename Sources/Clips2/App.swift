@@ -237,6 +237,8 @@ struct Clips2App: App {
                 Divider()
                 Button("Fix Transcript Text…") { app.active?.beginEditingText() }
                 Button("Re-time Words to the Sound") { if let m = app.active { Task { await m.retimeWords() } } }
+                Button("Tighten Clip…  (pauses, ums, repeats)") { if let m = app.active, m.selectedClip != nil { m.showTighten = true } }
+                    .keyboardShortcut("t", modifiers: [.command, .option])
                 Divider()
                 Button("Mark as Use, Go to Next  (U)") { app.active?.markAndAdvance(.used) }
                 Button("Mark as Rejected, Go to Next  (X)") { app.active?.markAndAdvance(.rejected) }
@@ -409,6 +411,11 @@ enum Entry {
         if let i = args.firstIndex(of: "--resynctest"), i + 1 < args.count {
             let f = URL(fileURLWithPath: args[i + 1])
             Task { @MainActor in exit(await SelfTest.resyncTest(folder: f)) }
+            dispatchMain()
+        }
+        if let i = args.firstIndex(of: "--colortest"), i + 2 < args.count {
+            let v = URL(fileURLWithPath: args[i + 1]), o = URL(fileURLWithPath: args[i + 2])
+            Task { exit(await ColorTest.run(video: v, out: o)) }
             dispatchMain()
         }
         if let i = args.firstIndex(of: "--numbertest") {

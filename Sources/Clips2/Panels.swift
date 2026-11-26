@@ -404,7 +404,14 @@ struct CaptionStyleSheet: View {
         var line = CaptionStyle(); line.maxLines = 1; line.maxCharsPerLine = 22; line.mode = .highlight; line.positionY = 0.72
         var boxed = CaptionStyle(); boxed.mode = .highlight; boxed.uppercase = true; boxed.wordBox = true
         boxed.wordBoxColor = RGBA(r: 1, g: 0.83, b: 0); boxed.activeColor = .black; boxed.shadow = true
-        return [CaptionPreset(name: "Yellow pop (word by word)", style: pop),
+        // measured from a Descript export (Roboto Condensed Bold 100, Height 1.2, Y 2858 of 3840, W 1627 of 2160)
+        var desc = CaptionStyle(); desc.descript = true; desc.fontName = "RobotoCondensed-Bold"; desc.fontSize = 0.07806
+        desc.uppercase = true; desc.textColor = .white; desc.activeColor = .white; desc.mode = .highlight; desc.shadow = true
+        desc.wordBox = true; desc.wordBoxColor = RGBA(r: 0xAF / 255.0, g: 0x8D / 255.0, b: 0x68 / 255.0); desc.wordBoxRound = 0.1264
+        desc.wordBoxGlide = false; desc.maxLines = 1; desc.maxCharsPerLine = 60; desc.positionY = 0.74427
+        desc.sideMargin = 0.12338; desc.lineSpacing = 1.2; desc.pauseBreak = 1.5
+        return [CaptionPreset(name: "Descript match", style: desc),
+                CaptionPreset(name: "Yellow pop (word by word)", style: pop),
                 CaptionPreset(name: "Clean white, black box", style: clean),
                 CaptionPreset(name: "Big uppercase, outlined", style: big),
                 CaptionPreset(name: "One line, karaoke", style: line),
@@ -480,6 +487,8 @@ struct CaptionStyleSheet: View {
                     }
                     ColorPicker("Spoken-word colour", selection: Binding(get: { s.activeColor.color }, set: { v in set { $0.activeColor = RGBA(v) } }))
                         .disabled(s.mode == .reveal || s.mode == .line)
+                    Toggle("Copy Descript's animated captions", isOn: Binding(get: { s.descriptOn }, set: { v in set { $0.descript = v } }))
+                        .help("Groups, timing, box pop and shadow exactly like Descript's animated captions (one line at a time, balanced lines, a box that pops on each word). Start from the “Descript match” preset.")
                 }
                 Section("Box behind the spoken word") {
                     Toggle("Show a box behind the word being said", isOn: Binding(get: { s.wordBoxOn }, set: { v in set {

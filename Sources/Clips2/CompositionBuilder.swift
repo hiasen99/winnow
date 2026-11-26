@@ -15,6 +15,14 @@ struct LoadedAngle {
     var fps: Double
 }
 
+/// One frame at `fps`, keeping NTSC rates exact (29.97 stays 30000/1001 instead of becoming 30).
+func frameDuration(_ fps: Double) -> CMTime {
+    for num in [24000, 30000, 48000, 60000] where abs(fps - Double(num) / 1001) < 0.02 {
+        return CMTime(value: 1001, timescale: CMTimeScale(num))
+    }
+    return CMTime(value: 1, timescale: CMTimeScale(max(1, fps.rounded())))
+}
+
 enum MediaLoader {
     static func load(_ a: AngleSource) async throws -> LoadedAngle { try await load(url: a.url) }
     static func load(url: URL) async throws -> LoadedAngle {
@@ -123,7 +131,12 @@ enum CompositionBuilder {
         let vc = AVMutableVideoComposition()
         vc.renderSize = render
         let fps = min(60, max(24, loaded.compactMap { $0?.fps }.max() ?? 30))
-        vc.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps.rounded()))
+        vc.frameDuration = frameDuration(fps)
+        // say the picture is Rec. 709 (what cameras and phones record): without this, burning in captions
+        // (the Core Animation pass) brightened the whole picture by about 14 %
+        vc.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+        vc.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
+        vc.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
         var instructions: [AVMutableVideoCompositionInstruction] = []
         // shots zoomed out below 1× need the Core Image compositor (blurred copy behind the picture)
         var framed: [ObjectIdentifier: FramedInstruction] = [:]

@@ -485,6 +485,14 @@ enum Control {
             if let e = m.errorText { throw ControlError(e) }
             return m.notice ?? "Done."
         }),
+        ControlCommand(id: "transcript.fixDrift", label: "Fix Transcript Drift", menu: "(Claude only)", changesProject: true,
+                       params: "{offset: seconds, scale: e.g. 1.000443} — the transcript ran on a slightly different clock (word time = offset + scale × true time, measured against the sound): moves every word and hand-edited caption to the true time. Clips' starts, ends and cuts don't move. One Undo step.",
+                       enabled: { hasProject($0) },
+                       run: { app, a in
+            let m = try model(app)
+            guard let sc = a.num("scale") else { throw ControlError("Pass {\"offset\": s, \"scale\": e.g. 1.000443}.") }
+            return m.fixTranscriptDrift(offset: a.num("offset") ?? 0, scale: sc)
+        }),
         ControlCommand(id: "clip.select", label: "Show Clip", menu: "Clip list (click a clip)",
                        params: "{clip: number in the list (1 = first), id or title; omit, or \"full\", for the full recording}",
                        enabled: { hasProject($0) },

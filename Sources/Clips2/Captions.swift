@@ -154,6 +154,7 @@ enum Captions {
     /// Breaks one caption's words into lines (as many as it needs).
     static func wrap(_ ws: [CaptionWord], style: CaptionStyle, renderSize: CGSize) -> [[Int]] {
         guard !ws.isEmpty else { return [] }
+        if style.descriptOn { return DescriptCaptions.wrap(ws, style: style, renderSize: renderSize) }
         let f = font(style, width: renderSize.width)
         let maxW = renderSize.width * (1 - 2 * style.sideMargin)
         let space = measure(" ", font: f)
@@ -185,6 +186,7 @@ enum Captions {
     /// Groups words into on-screen captions.
     static func pages(_ words: [CaptionWord], style: CaptionStyle, renderSize: CGSize, total: Double) -> [CaptionPage] {
         guard !words.isEmpty else { return [] }
+        if style.descriptOn { return DescriptCaptions.pages(words, style: style, renderSize: renderSize, total: total) }
         let f = font(style, width: renderSize.width)
         let maxW = renderSize.width * (1 - 2 * style.sideMargin)
         let space = measure(" ", font: f)
@@ -239,7 +241,7 @@ enum Captions {
 
     // MARK: - Layers
 
-    private static func discrete(_ values: [Float], _ times: [Double], total: Double) -> CAKeyframeAnimation {
+    static func discrete(_ values: [Float], _ times: [Double], total: Double) -> CAKeyframeAnimation {
         let a = CAKeyframeAnimation(keyPath: "opacity")
         a.calculationMode = .discrete
         a.values = values
@@ -259,7 +261,7 @@ enum Captions {
     }
 
     /// Key frames that follow `values` at `times` (clip output time) along the whole clip.
-    private static func moving(_ keyPath: String, _ values: [Any], _ times: [Double], total: Double) -> CAKeyframeAnimation {
+    static func moving(_ keyPath: String, _ values: [Any], _ times: [Double], total: Double) -> CAKeyframeAnimation {
         let a = CAKeyframeAnimation(keyPath: keyPath)
         let T = max(total, 0.001)
         var vals = values
@@ -351,6 +353,7 @@ enum Captions {
     }
 
     static func makeLayer(_ track: CaptionTrack, style: CaptionStyle, renderSize: CGSize, total: Double) -> CALayer {
+        if style.descriptOn { return DescriptCaptions.makeLayer(track, style: style, renderSize: renderSize, total: total) }
         let root = CALayer()
         root.frame = CGRect(origin: .zero, size: renderSize)
         let words = track.words

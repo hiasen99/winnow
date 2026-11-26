@@ -93,6 +93,7 @@ final class ProjectModel: ObservableObject {
     @Published var popupDrag: PopupDrag? = nil
     /// The brand library window.
     @Published var showBrands = false
+    @Published var showTighten = false
     /// How many windows show this project. With none (Claude working on it in the background) it stays silent.
     var viewers = 0 { didSet { engine.player.isMuted = viewers <= 0 } }
 

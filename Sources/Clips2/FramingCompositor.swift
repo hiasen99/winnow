@@ -8,7 +8,12 @@ final class FramedInstruction: NSObject, AVVideoCompositionInstructionProtocol {
     var timeRange: CMTimeRange
     let enablePostProcessing = true        // lets the captions (Core Animation) draw on top in exports
     let containsTweening = true
-    let requiredSourceTrackIDs: [NSValue]?
+    var requiredSourceTrackIDs: [NSValue]? {
+        let ids = [trackID, overlayTrackID].filter { $0 != kCMPersistentTrackID_Invalid }
+        return ids.map { NSNumber(value: $0) }
+    }
+    /// the captions/popups track drawn on top (set by `Exporter.addOverlay`)
+    var overlayTrackID: CMPersistentTrackID = kCMPersistentTrackID_Invalid
     let passthroughTrackID: CMPersistentTrackID = kCMPersistentTrackID_Invalid
 
     /// kCMPersistentTrackID_Invalid = a black gap
@@ -29,7 +34,6 @@ final class FramedInstruction: NSObject, AVVideoCompositionInstructionProtocol {
         self.background = background
         self.renderSize = renderSize
         self.motion = motion
-        self.requiredSourceTrackIDs = trackID == kCMPersistentTrackID_Invalid ? [] : [NSNumber(value: trackID)]
     }
 
     /// The transform at composition time `t` (fixed unless the shot follows a point).
@@ -124,6 +128,13 @@ final class FramingCompositor: NSObject, AVVideoCompositing {
             let front = picture.transformed(by: ciTransform(tf.concatenating(k), raw: raw, renderHeight: size.height))
             image = front.composited(over: image).cropped(to: bounds)
             CVBufferPropagateAttachments(src, out)
+        }
+        // captions and popups (rendered as their own track) on top
+        if let ins = request.videoCompositionInstruction as? FramedInstruction, ins.overlayTrackID != kCMPersistentTrackID_Invalid,
+           let ov = request.sourceFrame(byTrackID: ins.overlayTrackID) {
+            let k = CGAffineTransform(scaleX: size.width / CGFloat(max(1, CVPixelBufferGetWidth(ov))),
+                                      y: size.height / CGFloat(max(1, CVPixelBufferGetHeight(ov))))
+            image = CIImage(cvPixelBuffer: ov).transformed(by: k).composited(over: image).cropped(to: bounds)
         }
         context.render(image, to: out, bounds: bounds, colorSpace: nil)
         return out

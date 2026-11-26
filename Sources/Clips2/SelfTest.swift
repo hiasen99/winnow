@@ -350,6 +350,30 @@ enum SelfTest {
                     let appear = kfm.rects.first.map { Double($0.width) } ?? 0
                     log(String(format: "word box glide: %d key frames, appears at %.0f%% size, overshoot %.1f%%, settles in %.0f ms",
                                kfm.times.count, appear, (peakX - 230) / 180 * 100, ((moveKF.last?.0 ?? 2) - 2) * 1000))
+                    // Tighten: a plan on the test clip (dry run) and the filler / repeat rules
+                    do {
+                        let tc = m.selectedClip!
+                        let plan = m.tightenPlan(tc, TightenSettings())
+                        let fake = [Word(text: "So", start: 0, end: 0.3), Word(text: "um,", start: 0.5, end: 0.8), Word(text: "I", start: 1.0, end: 1.1),
+                                    Word(text: "I", start: 1.2, end: 1.3), Word(text: "think", start: 1.4, end: 1.7), Word(text: "and-", start: 1.8, end: 2.0),
+                                    Word(text: "yes.", start: 3.6, end: 3.9)]
+                        var fc = tc; fc.ranges = [TimeRange(start: 0, end: 4)]
+                        let fp = Tighten.plan(clip: fc, words: fake, settings: TightenSettings(), level: nil)
+                        log("tighten: test clip \(plan.count) cuts (\(String(format: "%.2f", plan.reduce(0) { $0 + $1.length })) s); rules → " +
+                            fp.map { "\($0.kind.rawValue):\($0.text)" }.joined(separator: ", "))
+                    }
+                    // Descript look: balanced lines, sentence ends, box pop, and a caption layer that builds
+                    do {
+                        let bal = DescriptCaptions.balance([100, 300, 100, 100, 300], gap: 20, maxW: 520).map { $0.count }
+                        let ends = ["SAID.", "HERE?\"", "SERMON.\"", "QUOTE...", "SO"].map { DescriptCaptions.endsSentence($0) }
+                        var ds = m.project.captionStyle; ds.descript = true; ds.wordBox = true; ds.fontName = "RobotoCondensed-Bold"
+                        let dl = DescriptCaptions.makeLayer(Captions.track(for: m.selectedClip!, project: m.project), style: ds,
+                                                            renderSize: m.selectedClip!.format.renderSize, total: m.selectedClip!.outputDuration)
+                        log(String(format: "descript captions: lines %@, sentence ends %@, pop %.2f/%.2f/%.2f, %d pages, font %@",
+                                   bal.map(String.init).joined(separator: "+"), ends.map { $0 ? "y" : "n" }.joined(),
+                                   DescriptCaptions.popScale(0), DescriptCaptions.popScale(0.09), DescriptCaptions.popScale(0.3),
+                                   dl.sublayers?.count ?? 0, NSFont(name: "RobotoCondensed-Bold", size: 10) != nil ? "ok" : "MISSING"))
+                    }
                     // follow a point: a made-up track of a camera drifting and zooming; the point must stay put in a 9:16 frame
                     do {
                         var tr = FollowTrack(angle: 0, start: 0, end: 4)

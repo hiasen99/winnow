@@ -11,13 +11,7 @@ enum Exporter {
         if Overlay.needed(clip: clip, captions: clip.captions) {
             // captions (when burned in) and follow popups
             let captions = Overlay.layer(clip: clip, project: p, renderSize: built.renderSize, total: built.duration, captions: clip.captions)
-            let parent = CALayer()
-            parent.frame = CGRect(origin: .zero, size: built.renderSize)
-            let videoLayer = CALayer()
-            videoLayer.frame = parent.frame
-            parent.addSublayer(videoLayer)
-            parent.addSublayer(Captions.container(captions, size: built.renderSize))
-            vc.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parent)
+            addOverlay(Captions.container(captions, size: built.renderSize), to: vc, composition: built.composition)
         }
         try? FileManager.default.removeItem(at: url)
         guard let session = AVAssetExportSession(asset: built.composition, presetName: AVAssetExportPresetHighestQuality) else {
@@ -34,6 +28,24 @@ enum Exporter {
         defer { watcher.cancel() }
         try await session.export(to: url, as: .mp4)
         progress(1)
+    }
+
+    /// Draws `layer` (captions, popups) over the picture. The layer is rendered as a track of its own and laid over
+    /// the picture by the compositor, so the picture never goes through Core Animation: that pass
+    /// (`postProcessingAsVideoLayer`) brightened the whole picture by ~10 levels (a gamma change) in every export.
+    static func addOverlay(_ layer: CALayer, to vc: AVMutableVideoComposition, composition: AVMutableComposition) {
+        let id = composition.unusedTrackID()
+        vc.animationTool = AVVideoCompositionCoreAnimationTool(additionalLayer: layer, asTrackID: id)
+        vc.instructions = vc.instructions.map { ins -> AVVideoCompositionInstructionProtocol in
+            if let f = ins as? FramedInstruction { f.overlayTrackID = id; return f }
+            if let a = ins as? AVVideoCompositionInstruction, let m = a.mutableCopy() as? AVMutableVideoCompositionInstruction {
+                let li = AVMutableVideoCompositionLayerInstruction()
+                li.trackID = id
+                m.layerInstructions = [li] + m.layerInstructions
+                return m
+            }
+            return ins
+        }
     }
 
     /// Just the clip's sound (cuts, sound changes and levels included).

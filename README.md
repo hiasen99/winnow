@@ -29,7 +29,13 @@ interviews, sermons, panel conversations. Think of a small Final Cut with Claude
 - **Captions that are easy to fix.** Captions are blocks on the timeline: drag to move,
   drag edges to re-time, double-click to fix the text. Style presets for the look, with
   any installed font and any weight (or any thickness on a variable font). The box
-  behind the spoken word glides from word to word with a quick spring.
+  behind the spoken word glides from word to word with a quick spring. Or switch on
+  *Copy Descript's animated captions* (the *Descript match* preset) for Descript's look:
+  sentences split into balanced lines, a box that pops onto each word, one soft shadow.
+- **Tighten a clip.** *Clip → Tighten Clip…* (⌥⌘T) finds long pauses, ums and uhs,
+  doubled words, false starts, stray sounds the transcript missed and dead air at the
+  ends. Untick anything you want to keep, click a cut to hear it, then apply them all as
+  one undo; every cut can be put back on the timeline.
 - **Follow popups and brands.** Put a popup on a clip that asks people to follow or
   subscribe: your profile picture in a coloured ring with a Follow button, or a
   YouTube-style bar with your name, a Subscribe button and a bell. It springs in, a hand
@@ -97,3 +103,6 @@ MIT — see [LICENSE](LICENSE).
 
 Word timing uses a Core ML conversion of wav2vec 2.0 (base, LibriSpeech 960h) from
 fairseq / torchaudio (MIT License), downloaded from this repository's `aligner-1` release.
+
+Winnow includes the Roboto Condensed font (Apache License 2.0, see
+`Resources/Fonts/RobotoCondensed-LICENSE.txt`).

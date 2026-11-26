@@ -121,6 +121,7 @@ struct ProjectView: View {
         .sheet(isPresented: $showFinder) { FindClipsSheet(model: model) }
         .sheet(isPresented: $model.showSpeakers) { SpeakersSheet(model: model) }
         .sheet(isPresented: $model.showBrands) { BrandsSheet(model: model) }
+        .sheet(isPresented: $model.showTighten) { TightenSheet(model: model) }
 
         .alert("Something went wrong", isPresented: Binding(get: { model.errorText != nil }, set: { if !$0 { model.errorText = nil } })) {
             Button("OK") { model.errorText = nil }

@@ -16,13 +16,7 @@ extension Exporter {
         if let clip, captions {
             let vc = built.videoComposition.mutableCopy() as! AVMutableVideoComposition
             let layer = Overlay.layer(clip: clip, project: p, renderSize: built.renderSize, total: built.duration, captions: true)
-            let parent = CALayer()
-            parent.frame = CGRect(origin: .zero, size: built.renderSize)
-            let videoLayer = CALayer()
-            videoLayer.frame = parent.frame
-            parent.addSublayer(videoLayer)
-            parent.addSublayer(Captions.container(layer, size: built.renderSize))
-            vc.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parent)
+            Exporter.addOverlay(Captions.container(layer, size: built.renderSize), to: vc, composition: built.composition)
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("clips2-frame-\(UUID().uuidString).mov")
             defer { try? FileManager.default.removeItem(at: url) }
             guard let s = AVAssetExportSession(asset: built.composition, presetName: AVAssetExportPresetHighestQuality) else {

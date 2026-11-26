@@ -16,6 +16,8 @@ xcrun actool Resources/Assets.xcassets --compile "$APP/Contents/Resources" --pla
   --minimum-deployment-target 26.0 --app-icon AppIcon --accent-color AccentColor \
   --output-partial-info-plist /tmp/winnow-assets.plist > /dev/null 2>&1 || true
 [ -f "$APP/Contents/Resources/AppIcon.icns" ] || iconutil -c icns Resources/icon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+# fonts that come with Winnow (Roboto Condensed for the Descript caption look)
+[ -d Resources/Fonts ] && cp -R Resources/Fonts "$APP/Contents/Resources/Fonts"
 if [ -n "$SIGN_ID" ]; then
   codesign --force --options runtime --timestamp -s "$SIGN_ID" "$APP"
 else
